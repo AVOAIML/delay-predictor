@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import tempfile
 import time
 import uuid
@@ -50,9 +51,12 @@ from m1_quote.raw_ingest import (
 from m2_inventory import csv_training as inventory_csv
 from m2_inventory.inventory_dataset import InventoryDatasetBuilder, MODEL_INPUT_COLUMNS
 from services.configurator import jobs
+from services.configurator.security import AuthContext, install_security
 from services.configurator.training_backends import get_training_backend
 
 app = FastAPI(title="MaXXflow ML Model Configurator", version="1.0")
+install_security(app)
+
 
 _default_origins = "http://localhost:3000,http://localhost:3009"
 ALLOWED_ORIGINS = [
@@ -74,14 +78,9 @@ app.add_middleware(
 
 @app.exception_handler(Exception)
 async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
-    """Starlette's ServerErrorMiddleware wraps CORSMiddleware, so an unhandled
-    exception produces a response with NO Access-Control-Allow-Origin header. The
-    browser then reports a CORS failure and swallows the real traceback, which is
-    exactly the wrong error to show someone. Answer with the actual message and
-    the header attached so the UI can display what went wrong."""
+    """Return the real server error; CORSMiddleware adds an allowed origin only."""
     return JSONResponse(status_code=500,
-                        content={"detail": f"{type(exc).__name__}: {exc}"},
-                        headers={"Access-Control-Allow-Origin": "*"})
+                        content={"detail": f"{type(exc).__name__}: {exc}"})
 _UPLOADS = Path(tempfile.gettempdir()) / "mxf_uploads"
 _UPLOADS.mkdir(exist_ok=True)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -780,14 +779,18 @@ def train(tenant: str, key: str, payload: dict):
 
 
 @app.get("/api/train/{run_id}")
-def train_status(run_id: str):
+def train_status(run_id: str, request: Request):
     """Same {status, logs, result} shape whichever backend ran it, so the UI does
     not need to know where training happened. An in-process run is not in the AML
     backend's map and vice versa, so ask the local dict first and fall through."""
-    local = jobs.status(run_id)
-    if local.get("status") != "unknown":
-        return local
-    return get_training_backend().status(run_id)
+    result = jobs.status(run_id)
+    if result.get("status") == "unknown":
+        result = get_training_backend().status(run_id)
+    auth: AuthContext = request.state.auth
+    run_tenant = result.get("tenant")
+    if run_tenant not in (None, "?", "global", auth.tenant_slug):
+        raise HTTPException(403, "Training run belongs to another tenant")
+    return result
 
 
 @app.post("/api/{tenant}/models/{key}/publish")

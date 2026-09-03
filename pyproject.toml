@@ -72,6 +72,7 @@ ui = [                                          # Configurator API + dashboard (
   "fastapi>=0.110",
   "uvicorn[standard]>=0.29",
   "python-multipart>=0.0.9",
+  "PyJWT[crypto]>=2.8",
   "streamlit>=1.33",
   "requests>=2.31",
 ]
