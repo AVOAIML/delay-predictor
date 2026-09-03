@@ -380,8 +380,7 @@ def _load_champion(reg: MLflowRegistry, tenant: str, key: str):
 def predict(tenant: str, key: str, payload: dict):
     m = _model_or_404(key)
     records = payload.get("records") or [payload]
-    print('*'*200)
-    print(records)
+
     reg = MLflowRegistry()
     loaded = _load_champion(reg, tenant, key)
     if loaded is None:
@@ -389,10 +388,9 @@ def predict(tenant: str, key: str, payload: dict):
                                  "to fall back to — train and publish first")
     serving_name, is_base, model = loaded
     df = _coerce(pd.DataFrame(records), m["fields"])
-    print(df.head())
+
     preds = model.predict(df)
-    print('*'*200)
-    print(preds)
+
     return {"predictions": preds.to_dict(orient="records"),
             "serving_name": serving_name, "base_model": is_base}
 
