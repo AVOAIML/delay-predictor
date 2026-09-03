@@ -4,9 +4,6 @@ steps. ML logic lives in features.py / train.py / score.py; this only wires IO."
 from __future__ import annotations
 
 import os
-
-import pandas as pd
-
 from maxxflow_core.clock import get_clock
 from maxxflow_core.errors import get_logger
 from maxxflow_features.lake import get_lake
