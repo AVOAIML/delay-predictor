@@ -1,0 +1,4 @@
+quotationID,lineNumber,productID,productName,materialSpec,quantity,unitPrice,salesPrice,listPrice,industry,customerID,customerName,region,salesRepID,quoteDate,leadTimeDays,paymentTerms,statusName,grandTotal,negotiatedSalesPrice,discountPercent,lineTotal,parentQuotationID,revisionNumber
+QT-MFG-000001,1,PRD-MFG-002,PRD-MFG-002 item,Aluminium 6061,19,891.7994,1264.19,1336.78,Metal Fabrication & Industrial Machinery,CUS-00042,Customer 0042,VIC,REP-012,2025-06-14,36,Net 30,Closed Won,45210.55,,5.43,24019.61,,1
+QT-MFG-000001,2,PRD-MFG-019,PRD-MFG-019 item,Hardened Steel,40,250.0,380.0,400.0,Metal Fabrication & Industrial Machinery,CUS-00042,Customer 0042,VIC,REP-012,2025-06-14,36,Net 30,Closed Won,45210.55,,5.0,15200.0,,1
+QT-MED-000002,1,PRD-MED-007,PRD-MED-007 item,316L Stainless,20,31.02,43.59,47.45,"Medical Devices, Diagnostics & Pharmaceuticals",CUS-00037,Customer 0037,NSW,REP-011,2025-06-18,21,Immediate,Closed Lost,871.8,,8.13,871.8,,1

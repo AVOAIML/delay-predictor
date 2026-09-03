@@ -1,0 +1,44 @@
+# Build context exclusions.
+#
+# Added when the Vite SPA moved into the API image. The `web` stage runs
+# `npm ci` and then `COPY frontend/ ./` — without this file that second COPY
+# drops the HOST's frontend/node_modules on top of the one npm just installed,
+# which is both slow and wrong: a macOS arm64 tree landing in a linux/amd64
+# image produces "invalid ELF header" at build time if anything native is
+# involved. CI never hits it (a fresh checkout has no node_modules), which is
+# the worst kind of difference — it only breaks on the machine you debug on.
+
+# --- never belongs in an image -------------------------------------------
+**/node_modules
+**/__pycache__
+**/*.pyc
+.venv
+*.egg-info
+
+# Built locally, rebuilt by the `web` stage. Copying a stale one in would let a
+# forgotten `npm run build` ship instead of the current source.
+frontend/dist
+
+# --- data and experiment state -------------------------------------------
+# Training data comes from the lake, not the image (commit bd55c0c). The src
+# stage's `COPY README.md dataset* ./dataset/` already tolerates its absence —
+# README.md is what makes that COPY succeed with nothing to glob.
+dataset
+mlruns
+mlartifacts
+*.db
+
+# --- local scratch and tooling -------------------------------------------
+.git
+.github
+.pytest_cache
+.vscode
+.claude
+.DS_Store
+**/.DS_Store
+_to_delete
+_claude_gate_variant
+*.tgz
+tests
+doc
+docs

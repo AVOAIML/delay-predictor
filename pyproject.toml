@@ -1,0 +1,104 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "maxxflow-aiml"
+version = "0.1.0"
+description = "MaXXFlow EPIC 10 — classical-ML AI/ML platform (parity-first, local↔Azure). One pinned env baked into the ACR image."
+# Upper bound excludes 3.13: numpy 2.0.x (and some deps) ship no cp313 wheels yet,
+# which forces a source build that fails on very new Apple clang. 3.10–3.12 use wheels.
+requires-python = ">=3.10,<3.13"
+readme = "README.md"
+license = { text = "Proprietary" }
+
+# ---------------------------------------------------------------------------
+# SINGLE pinned env -> the SAME env is baked into the ACR image (plan §3).
+# Classical ML only. NO transformer model is hosted or trained here.
+# LLM / embeddings are external APIs behind provider interfaces (stub locally).
+# ---------------------------------------------------------------------------
+dependencies = [
+  # config / profiles
+  "pydantic>=2.6",
+  "pydantic-settings>=2.2",
+  # data
+  "pandas>=2.1",
+  "numpy>=1.26",
+  "scipy>=1.11",
+  # classical models
+  "scikit-learn>=1.4",
+  "imbalanced-learn>=0.12",
+  "lightgbm>=4.3",
+  "xgboost>=2.0",
+  "shap>=0.46",
+  # text signal for M4 (classical, NO transformers): TF-IDF char n-grams + fuzzy
+  "rapidfuzz>=3.6",
+  # db (the ONLY place that touches Postgres lives behind the DAL)
+  "SQLAlchemy>=2.0",
+  "psycopg[binary]>=3.1",
+  # medallion lake IO (minio==adls, only the URI protocol differs)
+  "pyarrow>=15.0",
+  "fsspec>=2024.2",
+  "s3fs>=2024.2",
+  # mlflow is the spine (tracking + registry); Azure ML is MLflow-compatible
+  "mlflow>=2.11,<3",
+  # data-quality gate (plan names Great Expectations/pandera -> pandera, lighter)
+  "pandera>=0.18",
+  # misc
+  "joblib>=1.3",
+  "python-dateutil>=2.9",
+  "tzdata>=2024.1",
+  "adlfs>=2024.2",
+  "azure-identity>=1.17",
+]
+
+[project.optional-dependencies]
+# Heavier adapters kept optional so the core test suite runs on a modest laptop.
+# Each is loaded lazily behind a port; a pure-Python fallback exists for CI.
+drift = ["evidently>=0.4,<0.5"]                 # M*: drift / realism reports
+forecast = ["statsforecast>=1.7"]               # M2: Croston/EWMA (numpy fallback built-in)
+serve = ["azureml-inference-server-http>=1.0"]  # BYOC serving (azmlinfsrv) — parity w/ AML endpoint
+# TRAIN_BACKEND=azureml only. Optional so the thread backend, and therefore
+# `make ui` and the whole test suite, keep working with no Azure SDK present.
+#
+# azure-keyvault-secrets belongs to the TRAIN side of this extra, not the submit
+# side: the API passes KEYVAULT_NAME to the job and the JOB fetches the password
+# with the compute's managed identity (libs/maxxflow_core/keyvault.py). It was
+# missing, so the first AML DB run reached Postgres and then died on
+# `ModuleNotFoundError: No module named 'azure.keyvault'` — the one dependency
+# that only the remote half of the system needs.
+aml = ["azure-ai-ml>=1.20", "azure-identity>=1.17", "azure-keyvault-secrets>=4.8"]
+ui = [                                          # Configurator API + dashboard (local services)
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.29",
+  "python-multipart>=0.0.9",
+  "streamlit>=1.33",
+  "requests>=2.31",
+]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=4.1",
+]
+
+[project.scripts]
+maxxflow = "maxxflow_cli.__main__:main"
+
+[tool.setuptools.packages.find]
+# §3 monorepo layout: shared code in libs/, module code in modules/.
+# Each is a top-level importable package; one distribution, one pinned env.
+where = ["libs", "modules"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "parity: local↔Azure-shaped parity guards",
+  "data_quality: synthetic-data validation gates",
+  "smoke: tiny-synthetic smoke-train (CI gate)",
+  "contract: inference request/response IO contract",
+  "needs_db: requires a live Postgres (docker compose); skipped without DATA_DB_URL",
+]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.maxxflow]
+# Build-metadata read by the parity test that asserts AML Environment digest == ACR image digest.
+image_family = "maxxflow-aiml"
