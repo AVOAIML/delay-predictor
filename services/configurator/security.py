@@ -283,12 +283,18 @@ def get_auth_repository() -> AuthRepository:
     return AuthRepository()
 
 
-def _bearer_token(request: Request) -> str:
+def _extract_token(request: Request) -> str:
+    """Read the bearer header first, then the sign-in cookie as a fallback."""
     authorization = request.headers.get("Authorization", "")
     scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token.strip():
-        raise _unauthorized("Bearer token required")
-    return token.strip()
+    if scheme.lower() == "bearer" and token.strip():
+        return token.strip()
+
+    cookie_token = request.cookies.get("access_token", "").strip()
+    if cookie_token:
+        return cookie_token
+
+    raise _unauthorized("Access token required")
 
 
 def _required_permission(request: Request) -> str | None:
@@ -300,7 +306,7 @@ def _required_permission(request: Request) -> str | None:
 
 def authenticate_request(request: Request) -> AuthContext:
     """Authenticate one /api request and bind it to its requested tenant."""
-    claims = get_jwt_verifier().verify(_bearer_token(request))
+    claims = get_jwt_verifier().verify(_extract_token(request))
     tenant_slug = request.headers.get("x-tenant-slug", "").strip()
     if not tenant_slug:
         raise HTTPException(403, "x-tenant-slug is required")
