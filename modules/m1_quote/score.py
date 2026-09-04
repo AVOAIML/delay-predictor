@@ -15,7 +15,6 @@ import pandas as pd
 from maxxflow_core.clock import get_clock
 from maxxflow_core.errors import get_logger
 from maxxflow_core.jsonutil import json_default
-from maxxflow_core.money import D
 from maxxflow_mlops.naming import registered_model_name
 from m1_quote.features import FEATURE_COLUMNS, build_features
 
