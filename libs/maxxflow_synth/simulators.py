@@ -200,6 +200,12 @@ def simulate_m1(n: int, seed: int, tenant: str) -> ModuleBatch:
 # M2/M3/M4 — feature+label contracts now; full raw tables with their modules
 # ===========================================================================
 def simulate_m2(n: int, seed: int, tenant: str) -> ModuleBatch:
+    from m2_inventory.inventory_dataset import (
+        CATEGORICAL_FEATURES,
+        FEATURE_COLUMNS,
+        NUMERIC_FEATURES,
+    )
+
     rng = np.random.default_rng(seed + 2)
     on_hand = rng.uniform(0, 400, n)
     rop = rng.uniform(20, 250, n)
@@ -211,11 +217,39 @@ def simulate_m2(n: int, seed: int, tenant: str) -> ModuleBatch:
     days_cover = on_hand / np.maximum(consumption_rate, 1e-6)
     z = GT.m2_stockout_logit(deficit, consumption_rate, incoming_cover, vendor_reliability, demand_var, rng)
     y = (rng.random(n) < GT.sigmoid(z)).astype(int)
+    # Keep the generic synthetic gate on the same feature names as the canonical
+    # hazard artifacts. These are gate-only rows; production hazard training uses
+    # chronological weekly snapshots through InventoryDatasetBuilder.
     X = pd.DataFrame({
-        "consumption_rate": consumption_rate, "on_hand": on_hand, "rop": rop,
-        "rop_deficit": deficit, "incoming_cover": incoming_cover,
-        "vendor_reliability": vendor_reliability, "demand_var": demand_var, "days_cover": days_cover,
+        column: rng.lognormal(mean=1.0, sigma=0.6, size=n)
+        for column in NUMERIC_FEATURES
     })
+    X.update(pd.DataFrame({
+        "available_qty": on_hand,
+        "reserved_qty": rng.uniform(0, 50, n),
+        "forecasted_qty": consumption_rate * 28.0,
+        "rop": rop,
+        "inventory_to_rop_ratio": on_hand / np.maximum(rop, 1e-6),
+        "available_minus_rop": on_hand - rop,
+        "demand_forecast_qty": consumption_rate * 28.0,
+        "open_qty": incoming_cover,
+        "projected_without_po": on_hand - consumption_rate * 28.0,
+        "projected_with_po": on_hand + incoming_cover - consumption_rate * 28.0,
+        "po_needed_for_coverage": (deficit > incoming_cover).astype(float),
+        "calculated_vendor_reliability": vendor_reliability,
+        "open_po_vendor_reliability": vendor_reliability,
+    }))
+    categories = {
+        "item_type": ["Goods", "Component", "Raw Material"],
+        "unit_of_measurement": ["EA", "KG", "M"],
+        "warehouse_id": ["warehouse-a", "warehouse-b", "warehouse-c"],
+        "warehouse_type": ["storage", "production", "both"],
+        "draft_mo_status": ["Draft", "Not Applicable"],
+        "mo_status": ["Confirmed", "In Progress", "Not Applicable"],
+    }
+    for column in CATEGORICAL_FEATURES:
+        X[column] = rng.choice(categories[column], n)
+    X = X[FEATURE_COLUMNS]
     return ModuleBatch(module="m2_inventory", features=X, label=pd.Series(y, name="stockout_30d"),
                        label_kind="binary",
                        meta={"positive_rate": float(y.mean()),

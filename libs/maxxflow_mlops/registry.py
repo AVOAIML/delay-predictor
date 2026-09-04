@@ -183,6 +183,11 @@ class MLflowRegistry:
         mv = self.client.get_model_version_by_alias(name=name, alias=alias)
         return dict(mv.tags or {})
 
+    def get_version_tags(self, *, name: str, version: str) -> dict:
+        """Return tags for one exact registered version without registry search."""
+        mv = self.client.get_model_version(name=name, version=str(version))
+        return dict(mv.tags or {})
+
     # --- read path (load by name@alias ONLY) ---------------------------------
     def load_champion(self, *, name: str, alias: str | None = None) -> Any:
         alias = alias or get_settings().model_alias

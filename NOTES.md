@@ -22,8 +22,8 @@ env at `uv.lock`):
   0-guard, operator HMAC, M3 as-of-T censoring), Decimal math, TZ-invariant clock.
 - Synthetic generator for **all four** modules + the **3 CI gates** (schema, realism,
   leakage+learnability with per-module AUC bands; AUC≈1.0 fails — proven by a negative test).
-- Full per-module vertical slices in-memory: features → train (LightGBM / isotonic /
-  two heads / combiner) → register by name + `@champion` → serve via the BYOC
+- Full per-module vertical slices in-memory: authoritative feature contract → calibrated
+  candidate training / two heads / combiner → register by name + `@champion` → serve via the BYOC
   `ModelRouter` → guardrails → drift. Plus M3 `assert_no_leakage` and the M3/M4
   event-worker debounce.
 

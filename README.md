@@ -75,14 +75,15 @@ CPU and produces auditable, calibrated advisories.
 | Module | Predicts | Model | Retrain cadence | Serving → writeback |
 |---|---|---|---|---|
 | **M1 — Smart Quote Optimiser** | Calibrated win probability + recommended price band | LightGBM classifier + isotonic; 3 LightGBM quantile regressors (P25/P50/P75) vs empirical baseline | Monthly / on-demand | Online endpoint → `Quotation.customElements` |
-| **M2 — Predictive Inventory** | 30/60-day stockout risk | LightGBM + isotonic; EWMA/Croston demand | Weekly | **Batch** → `Item.customElements` |
+| **M2 — Predictive Inventory** | Calibrated 30/60-day stockout risk + deterministic alert rules | Chronological weekly hazard pipeline comparing Logistic Regression, Random Forest, LightGBM and XGBoost; weekly and horizon calibration | Weekly | **Batch** → `Item.customElements` |
 | **M3 — Production Delay** | P(delay) + overrun hours at the 25% milestone | Two LightGBM heads (classifier + regressor), leakage-safe as-of-T features | On MO completion (event) | Online endpoint → `ManufacturingOrder.customElements` |
 | **M4 — BOM Cleanup** | Per-line error probability + suggested fix | Deterministic rules + classical anomaly (TF-IDF char n-grams + RapidFuzz) → LogisticRegression combiner | On confirmed correction (event) | Online endpoint → `BOM.customElements` |
 | M5 — Job Scheduling | — | OR-Tools CP-SAT (+ deferred RL) | — | **Phase B — explicit stub only** |
 
-Every module is a uniform **vertical slice**: `dal` (read replica) → `features` → `train` →
-`model` (MLflow pyfunc wrapper) → `score` (advisory writeback) → `pipeline` (orchestration) →
-`synth` (synthetic generator). M1 additionally has a CSV/DB Configurator training path.
+Every module is a uniform **vertical slice**. M2's canonical slice is
+`inventory_dataset` → `csv_training` → `hazard_model_base`/candidate estimator →
+`batch_scoring` → `pipeline`; the Configurator uses that same training and prediction
+contract.
 
 ## Architecture
 
@@ -97,7 +98,7 @@ Every module is a uniform **vertical slice**: `dal` (read replica) → `features
                                     ▼
    Medallion lake (fsspec)       bronze → silver → gold  (MinIO == ADLS)
                                     ▼
-   Training                      LightGBM + isotonic / quantile / combiner  + auto-HPO
+   Training                      calibrated classical candidates / quantile / combiner
                                     ▼
    MLflow registry               name = t_<tenant>__m_<module>  ·  @champion / @previous alias
                                     ▼
@@ -196,7 +197,7 @@ workspace, and managed endpoints — with no code change.
 | `make seed` | Synthetic ground truth → tenant Postgres | ADF ingest |
 | `make validate` | 3 CI gates: schema / realism / leakage+learnability | data-quality gate |
 | `make fe` | bronze → silver → gold features on MinIO | AML feature step |
-| `make train` | LightGBM + isotonic → register to MLflow | AML training job |
+| `make train` | Train the module's canonical candidates → register to MLflow | AML training job |
 | `make serve` | `azmlinfsrv` model-server (same image as the endpoint) | AML online endpoint |
 | `make score` | advisory scores → `<entity>.customElements` | AML batch/endpoint |
 | `make drift` | Evidently / PSI report | AML model monitor |

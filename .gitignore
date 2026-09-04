@@ -16,7 +16,6 @@ frontend/*.tsbuildinfo
 frontend/vite.config.ts.timestamp-*.mjs
 npm-debug.log*
 frontend
-tests
 CLAUDE.md
 
 
@@ -50,10 +49,14 @@ _to_delete/
 _claude_gate_variant/
 _prisma/
 
-modules/m2_inventory
+
 modules/m3_delay
 modules/m4_bom
 modules/m5_scheduling
 
 config/profiles/azure.env
 config/profiles/azure.env
+
+frontend
+tests
+CLAUDE.md

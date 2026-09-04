@@ -2,9 +2,9 @@
 
 Only the GENERIC mechanics live here — type coercion, duplicate-row removal,
 outlier winsorising and missing-value imputation. **Domain semantics stay in each
-module's ``features.py``** (e.g. a missing ``vendor_reliability`` means the 0.85
-global prior; a missing BOM note means ``""``). A single generic imputer would get
-those wrong, so this module deliberately does not try.
+module's feature-contract code** (for example M2's ``inventory_dataset.py`` and
+M4's feature builder). A single generic imputer would get those domain defaults
+wrong, so this module deliberately does not try.
 
 Design notes
 ------------

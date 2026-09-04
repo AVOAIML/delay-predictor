@@ -55,7 +55,7 @@ Azure is Phase 2 (additive) — the parity seams are built now; only local adapt
 | Model | Primary output | Algorithm (classical only) | Cold-start signal |
 |---|---|---|---|
 | Smart Quote Optimiser (M1) | Calibrated win prob 0–100% + recommended price band | LightGBM + **isotonic calibration**; price band = quantile band over comparable *won* quotes | Synthetic latent win function |
-| Predictive Inventory Alerts (M2) | Stockout prob at 30d & 60d | **EWMA / Croston** consumption forecast → inventory projection → **gradient-boosting calibrator** (isotonic). **Weekly batch.** | Synthetic ≥6 months PO/GRN/consumption |
+| Predictive Inventory Alerts (M2) | Stockout prob at 30d & 60d | Chronological weekly hazard candidates (**Logistic Regression / Random Forest / LightGBM / XGBoost**) → weekly calibration → constrained 30d/60d horizon calibration + deterministic rules. **Weekly batch.** | Weekly inventory snapshots |
 | Production Delay Predictor (M3) | P(delay) at 25% milestone + T&M overrun hours | **Two LightGBM heads** (classifier + regressor); Bayesian target-encoding for work centre | Synthetic WOs + time logs with delay drivers |
 | AI-Assisted BOM Cleanup (M4) | Per-line error prob + suggested fix | Rule engine + **robust z-score (median/MAD) + TF-IDF char n-grams + RapidFuzz** + LogisticRegression/LightGBM combiner (surface > 0.35) | Rules + unsupervised anomaly at 0 corrections |
 | Intelligent Job Scheduling (M5) | *Phase B — scaffold only* | OR-Tools CP-SAT placeholder + RL note (not built) | — |
@@ -106,7 +106,7 @@ Azure is Phase 2 (additive) — the parity seams are built now; only local adapt
 
 1. **Seed** — synthetic generator seeds MasterData + schema-faithful, label-bearing rows into the tenant schema (== ADF ingest in prod).
 2. **Feature engineering** — DAL reads the tenant schema → shared transforms → gold parquet on the lake.
-3. **Train** — LightGBM (+ isotonic / two-head / combiner) → logged & registered to MLflow.
+3. **Train** — each module's canonical calibrated candidate pipeline → logged & registered to MLflow.
 4. **Promote** — champion/challenger gate moves the `@champion` alias if the challenger beats it on holdout + passes calibration.
 5. **Serve** — M1/M3/M4 via the azmlinfsrv endpoint (route by name + `@champion`); M2 via weekly batch.
 6. **Writeback** — advisory scores → `customElements` (M1→Quotation, M2→Item, M3→ManufacturingOrder, M4→Bom); low-confidence/suppressed/dismissed → `audit_logs`.
