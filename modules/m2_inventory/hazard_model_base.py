@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import warnings
 from abc import ABC, abstractmethod
 from datetime import date
@@ -22,7 +23,13 @@ from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_s
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-from m2_inventory.business_rules import InventoryBusinessRuleEvaluator
+from m2_inventory.business_rules import (
+    BADGE_RED_THRESHOLD,
+    MODEL_ALERT_THRESHOLD,
+    RULE_BASED_HISTORY_MONTHS,
+    SUPPRESSION_RELIABILITY_THRESHOLD,
+    InventoryBusinessRuleEvaluator,
+)
 from m2_inventory.feature_diagnostics import (
     audit_numeric_features,
     enforce_training_safeguards,
@@ -36,8 +43,6 @@ from m2_inventory.inventory_dataset import (
     InventoryDatasetBuilder,
     TemporalDatasetSplit,
 )
-
-MODEL_ALERT_THRESHOLD = 0.33
 
 
 def expected_calibration_error(y_true, probability, bins: int = 10) -> float:
@@ -209,6 +214,14 @@ class BaseInventoryHazardModel(ABC):
         self.feature_safeguard_warnings_: list[str] = []
         self.last_ood_report_: pd.DataFrame | None = None
         self._warned_ood_features: set[str] = set()
+        # Guards the read-check-update of _warned_ood_features below. Today's
+        # batch scoring calls predict_weekly_hazard sequentially so this never
+        # contends, but the model instance is cached/shared (see
+        # maxxflow_mlops.serving.ModelRouter's LRU cache) — a future concurrent
+        # serving path hitting the same instance from multiple threads would
+        # otherwise race on this shared mutable set (lost updates, duplicate
+        # warnings). Cheap to hold even uncontended, so it's in from the start.
+        self._ood_warn_lock = threading.Lock()
         self.is_fitted = False
 
     @abstractmethod
@@ -234,6 +247,16 @@ class BaseInventoryHazardModel(ABC):
         # test retain their natural class rates so probability calibration and
         # reported metrics remain representative of production.
         smote = SMOTE(random_state=self.random_state)
+        min_required = smote.k_neighbors + 1
+        class_counts = self.training_distribution_["original"]
+        if len(class_counts) < 2 or min(class_counts.values()) < min_required:
+            raise ValueError(
+                f"{self.algorithm_name}: training split has too few stockout "
+                f"examples to oversample — class counts {class_counts}, but SMOTE "
+                f"needs at least {min_required} examples of each class "
+                f"(k_neighbors={smote.k_neighbors} + 1). Widen the training date "
+                "range or check upstream label generation before retrying."
+            )
         smote_x, smote_y = smote.fit_resample(transformed_train, training_target)
         self.training_distribution_["after_smote"] = self._class_counts(smote_y)
         tomek = TomekLinks(sampling_strategy="all")
@@ -296,18 +319,28 @@ class BaseInventoryHazardModel(ABC):
             self.last_ood_report_ = serving_ood_report(
                 engineered, feature_audit
             )
-            warned_features = getattr(self, "_warned_ood_features", set())
-            new_features = set(self.last_ood_report_.get("feature", [])) - warned_features
-            if new_features:
-                warnings.warn(
-                    "M2 serving OOD/support warning; extreme |z| or synthetic-only "
-                    "training support for features: "
-                    f"{sorted(new_features)}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-                warned_features.update(new_features)
-                self._warned_ood_features = warned_features
+            observed_features = set(self.last_ood_report_.get("feature", []))
+            # Lazily create+store the lock for artifacts pickled before this
+            # attribute existed (see the "Older artifacts" note in __init__);
+            # every model built via __init__ already has one, so this branch
+            # is dead for anything trained after this change.
+            lock = getattr(self, "_ood_warn_lock", None)
+            if lock is None:
+                lock = threading.Lock()
+                self._ood_warn_lock = lock
+            with lock:
+                warned_features = getattr(self, "_warned_ood_features", set())
+                new_features = observed_features - warned_features
+                if new_features:
+                    warnings.warn(
+                        "M2 serving OOD/support warning; extreme |z| or synthetic-only "
+                        "training support for features: "
+                        f"{sorted(new_features)}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    warned_features.update(new_features)
+                    self._warned_ood_features = warned_features
         raw = self._raw_probability(
             self.preprocessor.transform(engineered[self._feature_columns()])
         )
@@ -367,13 +400,21 @@ class BaseInventoryHazardModel(ABC):
         reliability = self._numeric_column(
             origins, "open_po_vendor_reliability", np.nan
         ).fillna(self._numeric_column(origins, "calculated_vendor_reliability", np.nan))
+        # Unknown reliability defaults to 0.0 — never enough to clear
+        # SUPPRESSION_RELIABILITY_THRESHOLD below — rather than some neutral or
+        # optimistic value. Suppressing an alert is an affirmative claim that
+        # the open PO will actually cover the deficit, and a vendor with no
+        # track record hasn't earned that claim. This is deliberately the same
+        # conservative direction as business_rules.UNRELIABLE_PO_COVERAGE,
+        # which also treats missing reliability as unreliable rather than
+        # assuming it's fine — so the two don't drift apart again.
         reliability = reliability.fillna(
             self._numeric_column(origins, "computed_reliability", 0.0)
         ).fillna(0.0)
         out["suppressed"] = (
             (deficit > 0.0)
             & (origins["open_qty"].fillna(0.0) >= deficit)
-            & (reliability > 0.95)
+            & (reliability > SUPPRESSION_RELIABILITY_THRESHOLD)
         )
         out["model_version"] = self.model_version
         return out
@@ -441,6 +482,14 @@ class BaseInventoryHazardModel(ABC):
         return calibration
 
     def evaluate(self, test: pd.DataFrame) -> dict[str, Any]:
+        metrics: dict[str, Any] = {}
+        metrics.update(self._evaluate_weekly_metrics(test))
+        metrics.update(self._evaluate_horizon_metrics(test))
+        metrics.update(self._evaluate_projection_based_metrics(test))
+        return metrics
+
+    def _evaluate_weekly_metrics(self, test: pd.DataFrame) -> dict[str, Any]:
+        """Identity fields plus one-week-ahead hazard metrics."""
         weekly = self.predict_weekly_hazard(test)
         y_week = test["target"].astype(int).to_numpy()
         weekly_class = weekly >= 0.5
@@ -463,6 +512,13 @@ class BaseInventoryHazardModel(ABC):
         for stage, counts in self.training_distribution_.items():
             metrics[f"{stage}_negative_rows"] = counts.get(0, 0)
             metrics[f"{stage}_positive_rows"] = counts.get(1, 0)
+        return metrics
+
+    def _evaluate_horizon_metrics(self, test: pd.DataFrame) -> dict[str, Any]:
+        """30/60-day calibrated-risk metrics: order-violation checks, per-horizon
+        AUC/Brier/ECE against the production and independently-calibrated
+        paths, and reliability diagrams."""
+        metrics: dict[str, Any] = {}
         risks = self.predict_risk(test)
         horizon_gap = risks["model_risk_30d"] - risks["model_risk_60d"]
         horizon_order_violation = horizon_gap.gt(1e-12)
@@ -539,7 +595,12 @@ class BaseInventoryHazardModel(ABC):
                 metrics[f"{prefix}_calibration_table_after"] = calibration_table(
                     y_horizon, probability
                 )
+        return metrics
 
+    def _evaluate_projection_based_metrics(self, test: pd.DataFrame) -> dict[str, Any]:
+        """Diagnostic-only metrics for the richer projection-based risk path,
+        scored independently of the production calibrated-risk path above."""
+        metrics: dict[str, Any] = {}
         projection_risks = self._predict_projection_based_risks(test, max_weeks=9)
         projection_gap = projection_risks[0] - projection_risks[1]
         metrics["projection_based_risk_horizon_order_violations"] = int(
@@ -630,11 +691,18 @@ class BaseInventoryHazardModel(ABC):
         return list(getattr(self, "categorical_features_", CATEGORICAL_FEATURES))
 
     def _raw_probability(self, transformed) -> np.ndarray:
-        # Some macOS Accelerate/Numpy combinations emit spurious overflow
-        # RuntimeWarnings from a finite matrix multiplication. Validate the
-        # returned probabilities explicitly instead of leaking those warnings.
+        # Some macOS Accelerate/Numpy combinations emit a spurious "overflow
+        # encountered in matmul"/"...in dot" RuntimeWarning from a finite
+        # matrix multiplication. Silence only that message — not RuntimeWarning
+        # category-wide — so an unrelated, possibly-real RuntimeWarning from
+        # any of the four algorithms still surfaces. np.isfinite below is the
+        # actual correctness check either way.
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
+            warnings.filterwarnings(
+                "ignore",
+                message="overflow encountered",
+                category=RuntimeWarning,
+            )
             warnings.filterwarnings(
                 "ignore",
                 message="X does not have valid feature names.*",
@@ -648,14 +716,14 @@ class BaseInventoryHazardModel(ABC):
 
     @staticmethod
     def _rule_based_mask(frame: pd.DataFrame) -> np.ndarray:
-        # Missing history means "unknown", not automatically less than six
-        # months. Explicit exports can still opt into the deterministic fallback.
+        # Missing history means "unknown", not automatically less than the
+        # cutoff. Explicit exports can still opt into the deterministic fallback.
         history = BaseInventoryHazardModel._numeric_column(
-            frame, "months_of_history", 6.0
-        ).fillna(6.0)
+            frame, "months_of_history", RULE_BASED_HISTORY_MONTHS
+        ).fillna(RULE_BASED_HISTORY_MONTHS)
         explicit = frame.get("use_rule_based", pd.Series(False, index=frame.index))
         explicit = explicit.astype("boolean").fillna(False).astype(bool)
-        return ((history < 6.0) | explicit).to_numpy()
+        return ((history < RULE_BASED_HISTORY_MONTHS) | explicit).to_numpy()
 
     @staticmethod
     def _rule_based_hazard(frame: pd.DataFrame) -> np.ndarray:
@@ -671,9 +739,9 @@ class BaseInventoryHazardModel(ABC):
 
     @staticmethod
     def _badge(probability: float) -> str:
-        if probability >= 0.66:
+        if probability >= BADGE_RED_THRESHOLD:
             return "Red"
-        if probability >= 0.33:
+        if probability >= MODEL_ALERT_THRESHOLD:
             return "Amber"
         return "Green"
 

@@ -14,6 +14,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from m2_inventory.business_rules import UNRELIABLE_PO_RELIABILITY_THRESHOLD
+
 DEFAULT_DATASET_PATH = Path(
     "dataset/M2data/all_verticals_business_scenarios_v3.csv"
 )
@@ -398,9 +400,12 @@ class InventoryDatasetBuilder:
         )
         if "unreliable_po_coverage" in frame:
             unreliable_coverage = frame["unreliable_po_coverage"]
-            if not open_po_reliability[unreliable_coverage].lt(0.75).all():
+            if not open_po_reliability[unreliable_coverage].lt(
+                UNRELIABLE_PO_RELIABILITY_THRESHOLD
+            ).all():
                 raise ValueError(
-                    "Unreliable PO coverage requires open-PO reliability below 0.75"
+                    "Unreliable PO coverage requires open-PO reliability below "
+                    f"{UNRELIABLE_PO_RELIABILITY_THRESHOLD}"
                 )
 
         injected = frame["business_scenario_injected"]
@@ -605,7 +610,10 @@ class InventoryDatasetBuilder:
             projected["open_po_vendor_reliability"] = reliability.where(
                 ~receipt_has_arrived
             )
-        return self.engineer_features(projected)
+        # Not engineered here — this method's one caller (predict_weekly_hazard)
+        # always engineers its input immediately, so doing it here too would
+        # just recompute the identical derived columns a second time.
+        return projected
 
     def project_week_projection_based(
         self, frame: pd.DataFrame, week_index: int
@@ -620,7 +628,10 @@ class InventoryDatasetBuilder:
         """
         if week_index < 0:
             raise ValueError("week_index must be non-negative")
-        projected = self.engineer_features(frame).copy()
+        # frame is this method's one caller's `origins`, already engineered
+        # before the per-week loop — re-engineering it here would just repeat
+        # that same work on every iteration.
+        projected = frame.copy()
         origin_date = pd.to_datetime(projected["snapshot_date"], errors="coerce")
         projected_date = origin_date + pd.to_timedelta(7 * week_index, unit="D")
         projected["snapshot_date"] = projected_date
@@ -673,7 +684,10 @@ class InventoryDatasetBuilder:
         projected["open_po_vendor_reliability"] = reliability.where(
             ~receipt_has_arrived
         )
-        return self.engineer_features(projected)
+        # Not engineered here either — see the note at the top of this method;
+        # predict_weekly_hazard (this method's one caller, via
+        # _predict_projection_based_risks) engineers its input regardless.
+        return projected
 
     @staticmethod
     def _numeric_or_default(

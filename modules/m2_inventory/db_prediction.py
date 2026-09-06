@@ -13,8 +13,11 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
+from maxxflow_core.errors import get_logger
+from m2_inventory.business_rules import RULE_BASED_HISTORY_MONTHS
 from m2_inventory.inventory_dataset import MODEL_INPUT_COLUMNS
 
+log = get_logger("m2_inventory.db_prediction")
 
 _MO_STATUS_LABELS = {
     "DRAFT": "Draft",
@@ -124,6 +127,10 @@ def build_db_prediction_snapshots(
                          how="left", suffixes=("", "_mo"))
         if not components.empty and not orders.empty else pd.DataFrame()
     )
+    component_orders_by_item = (
+        {item_id: group for item_id, group in component_orders.groupby("item_id", sort=False)}
+        if not component_orders.empty else {}
+    )
 
     pos = _frame(tables, "purchase_orders")
     po_lines = _frame(tables, "purchase_order_lines")
@@ -142,6 +149,10 @@ def build_db_prediction_snapshots(
             - pd.to_numeric(open_lines["received_quantity"], errors="coerce").fillna(0.0)
         ).clip(lower=0.0)
         open_lines = open_lines[open_lines["_open_qty"] > 0].copy()
+    open_lines_by_item = (
+        {item_id: group for item_id, group in open_lines.groupby("item_id", sort=False)}
+        if not open_lines.empty else {}
+    )
 
     boms = _frame(tables, "boms")
     bom_components = _frame(tables, "bom_components")
@@ -155,10 +166,12 @@ def build_db_prediction_snapshots(
 
     as_of_ts = pd.Timestamp(as_of).tz_localize(None) if pd.Timestamp(as_of).tzinfo else pd.Timestamp(as_of)
     rows: list[dict] = []
+    skipped_item_ids: list = []
     for item in items.to_dict(orient="records"):
         item_id = item["id"]
         warehouse_id = item.get("default_warehouse_id")
         if warehouse_id is None or pd.isna(warehouse_id):
+            skipped_item_ids.append(item_id)
             continue
         warehouse = (
             warehouse_by_id.loc[warehouse_id]
@@ -168,7 +181,7 @@ def build_db_prediction_snapshots(
         primary = vendor_by_item.get(item_id)
         primary_vendor = primary.get("vendor_id") if primary is not None else None
 
-        mo = component_orders[component_orders["item_id"].eq(item_id)] if not component_orders.empty else pd.DataFrame()
+        mo = component_orders_by_item.get(item_id, pd.DataFrame())
         draft = mo[mo["_status"].eq("Draft")] if not mo.empty else pd.DataFrame()
         active = mo[mo["_status"].isin(["Confirmed", "In Progress"])] if not mo.empty else pd.DataFrame()
         active_statuses = set(active["_status"]) if not active.empty else set()
@@ -176,7 +189,7 @@ def build_db_prediction_snapshots(
             "Confirmed" if "Confirmed" in active_statuses else "Not Applicable"
         )
 
-        incoming = open_lines[open_lines["item_id"].eq(item_id)] if not open_lines.empty else pd.DataFrame()
+        incoming = open_lines_by_item.get(item_id, pd.DataFrame())
         if not incoming.empty and "warehouse_id" in incoming:
             at_warehouse = incoming[ incoming["warehouse_id"].isna() | incoming["warehouse_id"].eq(warehouse_id) ]
             if not at_warehouse.empty:
@@ -204,12 +217,12 @@ def build_db_prediction_snapshots(
             "item_name": item.get("item_name"),
             "part_number": item.get("part_number"),
             "warehouse_id": str(warehouse_id),
-            "warehouse_name": warehouse.get("warehouse_name") if isinstance(warehouse, Mapping) else warehouse.get("warehouse_name"),
+            "warehouse_name": warehouse.get("warehouse_name"),
             "snapshot_date": as_of_ts.normalize(),
             "item_type": item.get("item_type"),
             "unit_cost": item.get("unit_cost"),
             "unit_of_measurement": item.get("unit_of_measurement"),
-            "warehouse_type": warehouse.get("warehouse_type") if hasattr(warehouse, "get") else None,
+            "warehouse_type": warehouse.get("warehouse_type"),
             "available_qty": _numeric(item.get("available_quantity")),
             "reserved_qty": _numeric(active.get("reserved_qty", pd.Series(dtype=float)).sum()),
             "forecasted_qty": forecast,
@@ -230,9 +243,18 @@ def build_db_prediction_snapshots(
             "mo_status": mo_status,
             "consumed_qty": _numeric(active.get("consumed_qty", pd.Series(dtype=float)).sum()),
             "months_of_history": months,
-            "use_rule_based": months < 6.0,
+            "use_rule_based": months < RULE_BASED_HISTORY_MONTHS,
             "external_risk_pct": _numeric(_custom_value(custom, "external_risk_pct", 0.0)),
         })
+
+    if skipped_item_ids:
+        shown = skipped_item_ids[:20]
+        more = f" (+{len(skipped_item_ids) - len(shown)} more)" if len(skipped_item_ids) > len(shown) else ""
+        log.warning(
+            "M2 prediction snapshot: skipped %d/%d items with no default warehouse "
+            "set — never scored for stockout risk this run: %s%s",
+            len(skipped_item_ids), len(items), shown, more,
+        )
 
     return pd.DataFrame(rows)
 

@@ -170,7 +170,10 @@ def train_all_csv_models(
         "selection_warning": (
             None
             if eligible
-            else "All candidates failed the absolute MLflow quality floor; selected model is evaluation-only."
+            else "All 4 candidates failed the absolute MLflow quality floor; "
+            f"{winner['algorithm']} is shown for review only, not a usable model. "
+            "Publish will refuse it (the floor cannot be forced) and the current "
+            "champion — or no model at all, if none exists yet — keeps serving."
         ),
     }
     if register:
@@ -231,10 +234,17 @@ def train_for_configurator(
     )
     winner = summary["metrics"]
     if logger is not None:
-        logger.log(
-            f"Selected {summary['selected_model']} from four candidates "
-            f"(weekly AUC {winner['weekly_auc']:.3f})."
-        )
+        if summary["quality_floor_passed"]:
+            logger.log(
+                f"Selected {summary['selected_model']} from four candidates "
+                f"(weekly AUC {winner['weekly_auc']:.3f})."
+            )
+        else:
+            logger.log(
+                f"None of the four candidates cleared the quality floor. Best of "
+                f"a bad set is {summary['selected_model']} (weekly AUC "
+                f"{winner['weekly_auc']:.3f}) — not eligible to publish."
+            )
         if summary.get("selection_warning"):
             logger.log(f"Quality gate: {summary['selection_warning']}")
     return {

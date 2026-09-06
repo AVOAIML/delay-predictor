@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 
 import pandas as pd
+import sqlalchemy as sa
 
 from maxxflow_core.clock import get_clock
 from maxxflow_core.errors import get_logger
 from maxxflow_core.jsonutil import json_default
 from maxxflow_mlops.registry import MLflowRegistry
+from m2_inventory.business_rules import SUPPRESSION_RELIABILITY_THRESHOLD
 from m2_inventory.csv_training import MODULE, _coerce_model_input, require_hazard_artifact
 from m2_inventory.db_prediction import read_db_prediction_snapshots
 
@@ -77,33 +79,55 @@ def score(tenant: str = "demo") -> int:
     predictions = score_records(model, snapshots)
 
     data_access = get_data_access()
-    for position, (_, row) in enumerate(predictions.iterrows()):
-        item_id = snapshots.iloc[position]["item_id"]
-        data_access.execute(
-            "UPDATE items SET custom_elements = COALESCE(custom_elements,'{}'::jsonb) "
-            "|| CAST(:p AS jsonb) WHERE id = :id",
-            {
-                "p": json.dumps(_payload(row, version), default=json_default),
-                "id": item_id,
-            },
-            tenant=tenant,
-        )
-        if bool(row["suppressed"]):
-            data_access.execute(
-                "INSERT INTO audit_logs (module, action, entity_type, entity_id, metadata, timestamp) "
-                "VALUES ('Predictive Inventory Alerts','suppress','Item',:id,CAST(:m AS jsonb),now())",
-                {
-                    "id": item_id,
-                    "m": json.dumps(
-                        {
-                            "reason": "open PO covers deficit AND vendor on-time>95%",
-                            "model_risk_30d": row["model_risk_30d"],
-                        },
-                        default=json_default,
-                    ),
-                },
-                tenant=tenant,
-            )
+    update_stmt = sa.text(
+        "UPDATE items SET custom_elements = COALESCE(custom_elements,'{}'::jsonb) "
+        "|| CAST(:p AS jsonb) WHERE id = :id"
+    )
+    suppress_stmt = sa.text(
+        "INSERT INTO audit_logs (module, action, entity_type, entity_id, metadata, timestamp) "
+        "VALUES ('Predictive Inventory Alerts','suppress','Item',:id,CAST(:m AS jsonb),now())"
+    )
 
-    log.info("M2 hazard batch scored %d items (model v%s)", len(predictions), version)
-    return len(predictions)
+    failed_item_ids: list = []
+    with data_access.transaction(tenant=tenant) as conn:
+        for _, row in predictions.iterrows():
+            item_id = row["item_id"]
+            try:
+                with conn.begin_nested():
+                    conn.execute(
+                        update_stmt,
+                        {
+                            "p": json.dumps(_payload(row, version), default=json_default),
+                            "id": item_id,
+                        },
+                    )
+                    if bool(row["suppressed"]):
+                        conn.execute(
+                            suppress_stmt,
+                            {
+                                "id": item_id,
+                                "m": json.dumps(
+                                    {
+                                        "reason": (
+                                            "open PO covers deficit AND vendor on-time>"
+                                            f"{SUPPRESSION_RELIABILITY_THRESHOLD:.0%}"
+                                        ),
+                                        "model_risk_30d": row["model_risk_30d"],
+                                    },
+                                    default=json_default,
+                                ),
+                            },
+                        )
+            except Exception:
+                failed_item_ids.append(item_id)
+                log.exception("M2 batch scoring: item %s failed to save", item_id)
+
+    scored = len(predictions) - len(failed_item_ids)
+    if failed_item_ids:
+        log.warning(
+            "M2 hazard batch scored %d/%d items (model v%s); %d failed: %s",
+            scored, len(predictions), version, len(failed_item_ids), failed_item_ids,
+        )
+    else:
+        log.info("M2 hazard batch scored %d items (model v%s)", scored, version)
+    return scored

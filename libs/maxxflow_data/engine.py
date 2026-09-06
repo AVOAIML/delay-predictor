@@ -9,6 +9,7 @@ A read-path guard refuses any SQL that references ``tenant_id`` or the stale
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 from typing import Any, Mapping
 
 import pandas as pd
@@ -73,6 +74,17 @@ class DataAccess:
         with self.engine.begin() as conn:
             self._set_search_path(conn, tenant)
             conn.execute(sa.text(sql), dict(params or {}))
+
+    @contextmanager
+    def transaction(self, *, tenant: str | None = None):
+        """One connection, one outer transaction, for a batch of writes that
+        would otherwise pay execute()'s per-call connection+BEGIN+COMMIT cost
+        once per row. Yields the raw connection so the caller can isolate each
+        statement with its own ``conn.begin_nested()`` (SAVEPOINT) — a failure
+        there rolls back only that nested block, not the whole batch."""
+        with self.engine.begin() as conn:
+            self._set_search_path(conn, tenant)
+            yield conn
 
 
 def get_data_access() -> DataAccess:
