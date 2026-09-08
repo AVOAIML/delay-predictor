@@ -5,21 +5,6 @@
 # base so the AML Environment digest == ACR image digest (parity CI guard §12).
 # ---------------------------------------------------------------------------
 
-# ---- web: build the Configurator SPA -------------------------------------
-# VITE_API_BASE is EMPTY on purpose. Vite inlines it at build time, so a value
-# here would pin the bundle to one API hostname; empty makes every call in
-# api.ts relative ("/api/..."), which resolves against whatever origin serves
-# the page. One image, any hostname, and no CORS in the path.
-FROM node:22-alpine AS web
-WORKDIR /web
-COPY frontend/package.json frontend/package-lock.json ./
-# `npm ci` not `npm install`: the lock file is the point of having one, and it
-# fails loudly on drift instead of silently resolving something else on CI.
-RUN npm ci --no-audit --no-fund
-COPY frontend/ ./
-ENV VITE_API_BASE=""
-RUN npm run build
-
 # ---- base: pinned env, no source -----------------------------------------
 FROM python:3.10-slim AS base
 ENV PYTHONUNBUFFERED=1 \
@@ -42,7 +27,6 @@ FROM base AS src
 COPY libs ./libs
 COPY modules ./modules
 COPY config ./config
-COPY db ./db
 COPY docker ./docker
 COPY services ./services
 COPY README.md dataset* ./dataset/
@@ -81,12 +65,12 @@ CMD ["python", "-c", "print('set command in compose: uvicorn services.configurat
 # ---- api: Configurator API with the command baked in ----------------------
 # Azure Container Apps mangles --command/--args string splitting, so the
 # entrypoint lives in the image. Same stage contents as `ui`.
+#
+# API-only: no SPA is built or copied in. services/configurator/app.py already
+# handles a missing frontend/dist by serving a plain JSON stub at / instead of
+# 404ing (see the bottom of that file), so this needs no other change.
 FROM src AS api
 ENV APP_ENV=azure
 WORKDIR /app
-# The SPA ships INSIDE the API image and is served by FastAPI at / (see the
-# bottom of services/configurator/app.py). Same origin as the API it calls, so
-# there is one URL to publish and one to lock down.
-COPY --from=web /web/dist ./frontend/dist
 EXPOSE 8000
 CMD ["uvicorn", "services.configurator.app:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -54,9 +54,6 @@ modules/m3_delay
 modules/m4_bom
 modules/m5_scheduling
 
-config/profiles/azure.env
-config/profiles/azure.env
-
 frontend
 tests
 CLAUDE.md
