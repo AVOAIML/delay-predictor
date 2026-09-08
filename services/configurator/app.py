@@ -818,14 +818,18 @@ def inventory_dashboard(tenant: str):
             .tail(1)
             .reset_index(drop=True)
         )
-        # This dashboard is explicitly CSV-backed.  It uses the selected artifact
-        # written by the most recent wizard/CLI CSV run and therefore remains
-        # available even when MLflow is offline or the quality gate correctly
-        # declined to publish a champion.
+        # This dashboard is CSV-backed by default: it uses the selected artifact
+        # written by the most recent wizard/CLI CSV run, so it stays available
+        # even when nothing has been published yet. But that artifact is only
+        # ever the BEST of the 4 candidates trained together — if all 4 failed
+        # the quality floor, score_latest_csv_snapshots falls back to the
+        # published MLflow champion instead of silently serving a failing
+        # model (the floor already blocks *promotion*; this closes the same
+        # gap for this CSV-artifact read path).
         risks = inventory_csv.score_latest_csv_snapshots(
-            _INVENTORY_CSV, _INVENTORY_ARTIFACTS
+            tenant, _INVENTORY_CSV, _INVENTORY_ARTIFACTS
         )
-        model_source = "latest CSV evaluation winner"
+        model_source = "latest CSV evaluation winner (or published champion, if that run failed the quality floor)"
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         raise HTTPException(409, f"inventory dashboard is not ready: {exc}") from exc
 
@@ -1015,15 +1019,30 @@ def inventory_predict_csv(tenant: str, payload: dict):
             raw.loc[0, "use_rule_based"] = raw.loc[0, "use_rule_based"].strip().lower() in {
                 "true", "1", "yes",
             }
-        model = inventory_csv.load_selected_model(_INVENTORY_ARTIFACTS)
         model_input = inventory_csv._coerce_model_input(raw)
-        prediction = model.predict_risk(model_input).iloc[0]
-    except (FileNotFoundError, TypeError, ValueError) as exc:
+        summary_path = _INVENTORY_ARTIFACTS / "training_summary.json"
+        summary = (
+            json.loads(summary_path.read_text(encoding="utf-8"))
+            if summary_path.exists() else {}
+        )
+        if summary.get("quality_floor_passed", False):
+            model = inventory_csv.load_selected_model(_INVENTORY_ARTIFACTS)
+            prediction = model.predict_risk(model_input).iloc[0]
+            algorithm = model.algorithm_name
+            model_source = "latest CSV evaluation winner"
+        else:
+            # The last comparison run's best-of-4 failed the quality floor —
+            # do not silently serve it. Fall back to the published champion,
+            # the same safety net `publish` already enforces at promotion time.
+            predictions, algorithm = inventory_csv._score_via_champion(tenant, model_input)
+            prediction = predictions.iloc[0]
+            model_source = "published champion (latest CSV run failed the quality floor)"
+    except (FileNotFoundError, TypeError, ValueError, RuntimeError) as exc:
         raise HTTPException(409, f"inventory prediction is not ready: {exc}") from exc
     return {
         "tenant": tenant,
-        "algorithm": model.algorithm_name,
-        "model_source": "latest CSV evaluation winner",
+        "algorithm": algorithm,
+        "model_source": model_source,
         "prediction": {
             "item_id": str(prediction.get("item_id", record["item_id"])),
             "warehouse_id": str(prediction.get("warehouse_id", record["warehouse_id"])),

@@ -47,12 +47,13 @@ def train(
 
 
 def score_from_csv(
+                   tenant: str = "demo",
                    dataset_path=DEFAULT_DATASET_PATH,
                    artifact_dir="artifacts/m2_inventory"):
     """Score each latest item/warehouse snapshot with the CSV-model winner."""
     from m2_inventory.csv_training import score_latest_csv_snapshots
 
-    return score_latest_csv_snapshots(dataset_path, artifact_dir)
+    return score_latest_csv_snapshots(tenant, dataset_path, artifact_dir)
 
 
 def score_from_mlflow(tenant: str = "demo",

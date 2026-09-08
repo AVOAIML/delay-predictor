@@ -486,11 +486,51 @@ def load_local_prediction_model(
     return BaseInventoryHazardModel.load(path)
 
 
+def _score_via_champion(
+    tenant: str,
+    model_input: pd.DataFrame,
+    *,
+    registry: MLflowRegistry | None = None,
+) -> tuple[pd.DataFrame, str]:
+    """Score via the published MLflow champion.
+
+    Used both as the dedicated MLflow scoring path and as the fallback when the
+    latest CSV comparison run failed the quality floor — the floor already
+    blocks *promotion* (``publish``/``should_promote``), but the CSV-artifact
+    scoring paths read straight off disk and previously had no equivalent
+    check, so a floor-failing candidate could still reach real predictions.
+    Returns (predictions, algorithm_name) since a loaded MLflow pyfunc model
+    does not expose ``.algorithm_name`` the way the local wrapper does — the
+    name comes from the champion alias's own tags instead.
+    """
+    reg = registry or MLflowRegistry()
+    resolved = reg.resolve_champion_name(tenant=tenant, module=MODULE)
+    if resolved is None:
+        raise RuntimeError(
+            f"latest training run failed the quality floor for tenant {tenant!r} "
+            "and no published champion exists to fall back to — train and "
+            "publish a passing model first"
+        )
+    name = resolved[0]
+    version = reg.get_alias_version(name=name, alias="champion")
+    require_hazard_artifact(reg, name, str(version))
+    champion = reg.load_champion(name=name)
+    algorithm = reg.get_alias_tags(name=name, alias="champion").get("algorithm", "unknown")
+    return champion.predict(model_input), algorithm
+
+
 def score_latest_csv_snapshots(
+    tenant: str,
     dataset_path: str | Path = DEFAULT_DATASET_PATH,
     artifact_dir: str | Path = DEFAULT_ARTIFACT_DIR,
+    *,
+    registry: MLflowRegistry | None = None,
 ) -> pd.DataFrame:
-    """Score the latest snapshot per item/warehouse using the selected model."""
+    """Score the latest snapshot per item/warehouse using the selected model.
+
+    Falls back to the published MLflow champion when the latest comparison run
+    failed the quality floor, instead of silently serving a candidate the
+    publish gate would have refused."""
     builder = InventoryDatasetBuilder()
     snapshots = builder.load(dataset_path)
     latest = (
@@ -499,6 +539,14 @@ def score_latest_csv_snapshots(
         .tail(1)
         .reset_index(drop=True)
     )
+    summary_path = Path(artifact_dir) / "training_summary.json"
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        if not summary.get("quality_floor_passed", False):
+            predictions, _ = _score_via_champion(
+                tenant, _coerce_model_input(latest), registry=registry
+            )
+            return predictions
     return load_selected_model(artifact_dir).predict_risk(latest)
 
 
@@ -509,12 +557,6 @@ def score_latest_mlflow_snapshots(
     registry: MLflowRegistry | None = None,
 ) -> pd.DataFrame:
     """Score latest snapshots through the tenant/global MLflow champion."""
-    reg = registry or MLflowRegistry()
-    resolved = reg.resolve_champion_name(tenant=tenant, module=MODULE)
-    if resolved is None:
-        raise RuntimeError(
-            f"No published M2 champion exists for tenant {tenant!r} or the global base model"
-        )
     builder = InventoryDatasetBuilder()
     snapshots = builder.load(dataset_path)
     latest = (
@@ -523,10 +565,10 @@ def score_latest_mlflow_snapshots(
         .tail(1)
         .reset_index(drop=True)
     )
-    version = reg.get_alias_version(name=resolved[0], alias="champion")
-    require_hazard_artifact(reg, resolved[0], str(version))
-    champion = reg.load_champion(name=resolved[0])
-    return champion.predict(_coerce_model_input(latest))
+    predictions, _ = _score_via_champion(
+        tenant, _coerce_model_input(latest), registry=registry
+    )
+    return predictions
 
 
 def run_model_cli(model_class: Type[BaseInventoryHazardModel]) -> None:

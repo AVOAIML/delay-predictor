@@ -45,10 +45,11 @@ def build_features(tables: dict[str, pd.DataFrame], md, clock: Clock) -> pd.Data
 
     # --- labels from MasterData UUIDs (plan §1a row 2) ---
     win_stage = md.id("QUOTATION_STAGE", "SALES_ORDER")
-    won_status = md.id("QUOTATION_STATUS", "CONFIRMED")
-    lost_status = md.id("QUOTATION_STATUS", "CLOSED_LOST")
-    is_won = (q["stage_id"] == win_stage) | (q["status_id"] == won_status) | q["sales_order_id"].notna()
-    is_lost = q["status_id"] == lost_status
+    won_statuses = MD.resolve_ids(md, "QUOTATION_STATUS", MD.QUOTATION_WIN_STATUS_CODES)
+    lost_statuses = MD.resolve_ids(md, "QUOTATION_STATUS", MD.QUOTATION_LOSS_STATUS_CODES)
+    is_won = ((q["stage_id"] == win_stage) | q["status_id"].isin(won_statuses)
+              | q["sales_order_id"].notna())
+    is_lost = q["status_id"].isin(lost_statuses)
     q["is_won"] = is_won & ~is_lost
     q["is_closed"] = q["is_won"] | is_lost
     q["label"] = np.where(q["is_won"], 1.0, np.where(is_lost, 0.0, np.nan))

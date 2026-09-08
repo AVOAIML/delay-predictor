@@ -14,6 +14,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from maxxflow_core import masterdata as MD
 from maxxflow_data.engine import get_data_access
 from maxxflow_data.masterdata_map import load_md_map
 
@@ -30,10 +31,15 @@ _P = "SELECT id, name, unit_cost, sales_price FROM products WHERE deleted_at IS 
 
 def _label(q: pd.DataFrame, md) -> pd.DataFrame:
     win_stage = md.id("QUOTATION_STAGE", "SALES_ORDER")
-    won_status = md.id("QUOTATION_STATUS", "CONFIRMED")
-    lost_status = md.id("QUOTATION_STATUS", "CLOSED_LOST")
-    is_won = (q["stage_id"] == win_stage) | (q["status_id"] == won_status) | q["sales_order_id"].notna()
-    is_lost = q["status_id"] == lost_status
+    won_statuses = MD.resolve_ids(
+        md, "QUOTATION_STATUS", MD.QUOTATION_WIN_STATUS_CODES
+    )
+    lost_statuses = MD.resolve_ids(
+        md, "QUOTATION_STATUS", MD.QUOTATION_LOSS_STATUS_CODES
+    )
+    is_won = ((q["stage_id"] == win_stage) | q["status_id"].isin(won_statuses)
+              | q["sales_order_id"].notna())
+    is_lost = q["status_id"].isin(lost_statuses)
     q = q.copy()
     q["is_won"] = (is_won & ~is_lost)
     q["is_closed"] = q["is_won"] | is_lost

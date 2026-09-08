@@ -94,10 +94,28 @@ CATEGORIES: dict[str, dict] = {
 QUOTATION_WIN_STAGE = "SALES_ORDER"
 QUOTATION_WIN_STATUS = "CONFIRMED"
 QUOTATION_LOSS_STATUS = "CLOSED_LOST"
+# The live MRP API uses the *_STATUS codes, while older/synthetic datasets use
+# the shorter codes above. Accept both during the migration so either tenant
+# representation can be labelled correctly.
+QUOTATION_WIN_STATUS_CODES = ("SALES_ORDER_STATUS", QUOTATION_WIN_STATUS)
+QUOTATION_LOSS_STATUS_CODES = ("CLOSED_LOST_STATUS", QUOTATION_LOSS_STATUS)
 # M3: label measured at MO completion; trigger fires on MO -> DONE.
 MO_DONE = "DONE"
 WORK_ORDER_DONE = "DONE"
 WORK_ORDER_IN_PROGRESS = "IN_PROGRESS"
+
+
+def resolve_ids(md, category: str, codes: tuple[str, ...]) -> set[str]:
+    """Resolve every available MasterData ID among compatible code aliases."""
+    resolved: set[str] = set()
+    for code in codes:
+        try:
+            resolved.add(md.id(category, code))
+        except KeyError:
+            continue
+    if not resolved:
+        raise KeyError((category, codes))
+    return resolved
 
 
 def iter_entries():
