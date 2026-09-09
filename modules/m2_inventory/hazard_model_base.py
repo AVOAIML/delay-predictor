@@ -224,6 +224,17 @@ class BaseInventoryHazardModel(ABC):
         self._ood_warn_lock = threading.Lock()
         self.is_fitted = False
 
+    def __getstate__(self) -> dict[str, Any]:
+        """Exclude the process-local lock from persisted model state."""
+        state = self.__dict__.copy()
+        state.pop("_ood_warn_lock", None)
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """Restore model state and create a fresh lock in the loading process."""
+        self.__dict__.update(state)
+        self._ood_warn_lock = threading.Lock()
+
     @abstractmethod
     def build_estimator(self):
         """Create the algorithm-specific binary classifier."""

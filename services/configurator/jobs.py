@@ -31,6 +31,7 @@ from m1_quote.csv_common import RunLogger
 # for callers that still reach for jobs.build_training_frame.
 from m1_quote.frames import build_training_frame, write_option_graph  # noqa: F401
 from m2_inventory.csv_training import train_for_configurator as train_inventory_csv
+from m2_inventory.db_training import build_training_frame as build_inventory_db_frame
 from maxxflow_mlops.registry import MLflowRegistry
 
 _INVENTORY_ARTIFACTS = Path(__file__).resolve().parents[2] / "artifacts" / "m2_inventory"
@@ -44,7 +45,8 @@ _TRAINERS = {"m1_quote_win": csv_win.train, "m1_quote_price": csv_price.train,
 # below, same as any other model without DB parity.
 _DB_BUILDERS = {"m1_quote_win": db_features.build_win_frame,
                 "m1_quote_price": db_features.build_price_frame,
-                "m1_quote_line_win": db_features.build_line_frame}
+                "m1_quote_line_win": db_features.build_line_frame,
+                "m2_inventory": build_inventory_db_frame}
 
 
 def db_models() -> list[str]:
@@ -85,6 +87,7 @@ def start(tenant: str, model_key: str, *, source: str = "csv", csv_path: str | N
     job = {"run_id": run_id, "tenant": tenant, "model_key": model_key, "source": source,
            "data_tenant": read_from,
            "source_name": resolved_source_name, "dataset_row_count": dataset_row_count,
+           "fallback_used": False, "fallback_reason": None,
            "status": "running", "logger": logger, "result": None, "error": None,
            "started_at": time.time(), "finished_at": None}
     _JOBS[run_id] = job
@@ -94,10 +97,22 @@ def start(tenant: str, model_key: str, *, source: str = "csv", csv_path: str | N
             logger.set_progress(5, "preparing_data", "Preparing training data",
                                 message="Training worker started")
             if model_key == "m2_inventory":
-                if source != "csv":
-                    raise ValueError("m2_inventory currently retrains from CSV only")
+                dataset = csv_path
+                if source == "db":
+                    logger.log(f"Reading inventory snapshot history from tenant_{read_from}…")
+                    dataset = _DB_BUILDERS[model_key](read_from)
+                    job["dataset_row_count"] = int(len(dataset))
+                    job["fallback_used"] = bool(dataset.attrs.get("fallback_used"))
+                    job["fallback_reason"] = dataset.attrs.get("fallback_reason")
+                    job["source_name"] = dataset.attrs.get("source_name", job["source_name"])
+                    if job["fallback_used"]:
+                        logger.log(
+                            "WARNING: Real snapshot history is unavailable. Training with "
+                            "generated bootstrap history; metrics are not evidence of real "
+                            "historical performance."
+                        )
                 job["result"] = train_inventory_csv(
-                    csv_path, tenant, artifact_dir=_INVENTORY_ARTIFACTS,
+                    dataset, tenant, artifact_dir=_INVENTORY_ARTIFACTS,
                     register=True, source=source, logger=logger
                 )
             elif source == "db":
@@ -121,6 +136,8 @@ def start(tenant: str, model_key: str, *, source: str = "csv", csv_path: str | N
                 frame = build_training_frame(model_key, raw, tenant, logger)
                 job["result"] = trainer(frame, tenant, **kwargs)
             result = job["result"]
+            result["fallback_used"] = job["fallback_used"]
+            result["fallback_reason"] = job["fallback_reason"]
             MLflowRegistry().set_version_tags(
                 name=result["registered_name"],
                 version=str(result["version"]),
@@ -131,6 +148,8 @@ def start(tenant: str, model_key: str, *, source: str = "csv", csv_path: str | N
                     "algorithm": result.get("selected_model") or (
                         "lightgbm-isotonic" if model_key == "m1_quote_line_win" else None
                     ),
+                    "fallback_used": str(job["fallback_used"]).lower(),
+                    "fallback_reason": job["fallback_reason"],
                 },
             )
             job["status"] = "done"
@@ -160,6 +179,8 @@ def status(run_id: str) -> dict:
                "kind": "database" if job["source"] == "db" else "csv",
                "name": job["source_name"],
                "row_count": job["dataset_row_count"],
+               "fallback_used": job["fallback_used"],
+               "fallback_reason": job["fallback_reason"],
            },
            "elapsed_s": round(elapsed_until - job["started_at"], 1),
            "started_at": job["started_at"],

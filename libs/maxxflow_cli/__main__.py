@@ -77,7 +77,9 @@ RESULT_ARTIFACT = "configurator_result.json"
 
 def _tag_card_metadata(result: dict, *, model_key: str, source: str,
                        source_name: str, dataset_row_count: int,
-                       published_at: str | None = None) -> None:
+                       published_at: str | None = None,
+                       fallback_used: bool = False,
+                       fallback_reason: str | None = None) -> None:
     """Persist model-card fields on the exact candidate/champion version."""
     from maxxflow_mlops.registry import MLflowRegistry
 
@@ -92,6 +94,8 @@ def _tag_card_metadata(result: dict, *, model_key: str, source: str,
                 "lightgbm-isotonic" if model_key == "m1_quote_line_win" else None
             ),
             "published_at": published_at,
+            "fallback_used": str(fallback_used).lower(),
+            "fallback_reason": fallback_reason,
         },
     )
 
@@ -126,6 +130,67 @@ def _publish_result_artifact(tenant: str, model_key: str, result: dict) -> None:
         print(f"WARNING: could not attach {RESULT_ARTIFACT} "
               f"({type(e).__name__}: {e}) — the UI will fall back to metrics only",
               file=sys.stderr)
+
+
+def _train_inventory_and_report(args, *, frame, tenant: str, source: str, logger,
+                                publisher, source_name: str,
+                                dataset_row_count: int) -> None:
+    import contextlib
+    import json as _json
+    from datetime import datetime, timezone
+
+    from m2_inventory.csv_training import publish, train_for_configurator
+
+    fallback_used = bool(frame.attrs.get("fallback_used"))
+    fallback_reason = frame.attrs.get("fallback_reason")
+    if fallback_used:
+        logger.log(
+            "WARNING: Real snapshot history is unavailable. Training with generated "
+            "bootstrap history; metrics are not real historical performance evidence."
+        )
+
+    with contextlib.redirect_stdout(sys.stderr):
+        result = train_for_configurator(
+            frame, tenant, register=True, source=source, logger=logger
+        )
+    result["fallback_used"] = fallback_used
+    result["fallback_reason"] = fallback_reason
+    _tag_card_metadata(
+        result, model_key="m2_inventory", source=source, source_name=source_name,
+        dataset_row_count=dataset_row_count, fallback_used=fallback_used,
+        fallback_reason=fallback_reason,
+    )
+    _publish_result_artifact(tenant, "m2_inventory", result)
+    out = {"model": "m2_inventory", "tenant": tenant,
+           "version": result["version"], "metrics": result["metrics"],
+           "source": source, "published": None,
+           "fallback_used": fallback_used, "fallback_reason": fallback_reason}
+    if args.publish:
+        with contextlib.redirect_stdout(sys.stderr):
+            decision = publish(
+                tenant, str(result["version"]), result["metrics"], force=args.force
+            )
+        out["published"] = decision["published"]
+        out["blocker"] = decision.get("blocker")
+        out["gate_checks"] = decision.get("gate_checks")
+        if out["published"]:
+            published_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            _tag_card_metadata(
+                result, model_key="m2_inventory", source=source,
+                source_name=source_name, dataset_row_count=dataset_row_count,
+                published_at=published_at, fallback_used=fallback_used,
+                fallback_reason=fallback_reason,
+            )
+            out["published_at"] = published_at
+    print(_json.dumps(out, indent=2, default=str))
+    if publisher is not None:
+        logger.set_progress(100, "complete", "Training complete")
+        message = ("FINISHED" if not args.publish or out["published"]
+                   else f"NOT PUBLISHED - {out.get('blocker')}")
+        publisher.append(message)
+        publisher.close("FINISHED")
+    if args.publish and not out["published"]:
+        sys.exit(3)
 
 
 def cmd_train_csv(args):
@@ -202,46 +267,11 @@ def cmd_train_csv(args):
     dataset_row_count = int(os.environ.get("MAXXFLOW_DATASET_ROW_COUNT") or len(raw))
 
     if args.model == "m2_inventory":
-        from m2_inventory.csv_training import train_for_configurator
-
-        with contextlib.redirect_stdout(sys.stderr):
-            result = train_for_configurator(
-                raw, args.tenant, register=True, source="csv", logger=logger
-            )
-        _tag_card_metadata(
-            result, model_key=args.model, source="csv", source_name=source_name,
+        _train_inventory_and_report(
+            args, frame=raw, tenant=args.tenant, source="csv", logger=logger,
+            publisher=publisher, source_name=source_name,
             dataset_row_count=dataset_row_count,
         )
-        _publish_result_artifact(args.tenant, args.model, result)
-        out = {"model": args.model, "tenant": args.tenant,
-               "version": result["version"], "metrics": result["metrics"],
-               "source": "csv", "published": None}
-        if args.publish:
-            from m2_inventory.csv_training import publish
-
-            with contextlib.redirect_stdout(sys.stderr):
-                decision = publish(args.tenant, str(result["version"]), result["metrics"],
-                                   force=args.force)
-            out["published"] = decision["published"]
-            out["blocker"] = decision.get("blocker")
-            out["gate_checks"] = decision.get("gate_checks")
-            if out["published"]:
-                from datetime import datetime, timezone
-                published_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-                _tag_card_metadata(
-                    result, model_key=args.model, source="csv", source_name=source_name,
-                    dataset_row_count=dataset_row_count, published_at=published_at,
-                )
-                out["published_at"] = published_at
-        print(_json.dumps(out, indent=2, default=str))
-        if publisher is not None:
-            logger.set_progress(100, "complete", "Training complete")
-            message = ("FINISHED" if not args.publish or out["published"]
-                       else f"NOT PUBLISHED - {out.get('blocker')}")
-            publisher.append(message)
-            publisher.close("FINISHED")
-        if args.publish and not out["published"]:
-            sys.exit(3)
         return
 
     # STDOUT IS THE MACHINE INTERFACE. MLflow prints its own run/experiment URLs
@@ -437,12 +467,14 @@ def cmd_train_db(args):
     settings = get_settings()
     data_tenant = args.data_tenant or args.tenant
 
-    from m1_quote import db_features
     from m1_quote.csv_common import RunLogger
+    from m1_quote import db_features
+    from m2_inventory.db_training import build_training_frame as build_inventory_frame
 
     builders = {"m1_quote_win": db_features.build_win_frame,
                 "m1_quote_price": db_features.build_price_frame,
-                "m1_quote_line_win": db_features.build_line_frame}
+                "m1_quote_line_win": db_features.build_line_frame,
+                "m2_inventory": build_inventory_frame}
     if args.model not in builders:
         print(f"{args.model} has no DB-path builder; it trains from an uploaded CSV. "
               f"Models with a DB path: {', '.join(sorted(builders))}.", file=sys.stderr)
@@ -483,19 +515,21 @@ def cmd_train_db(args):
         frame = builders[args.model](data_tenant)
     _say(f"{len(frame)} training rows x {len(frame.columns)} columns", logger)
     if frame.empty:
-        msg = ("the query returned no rows — the source tables may be empty, or every "
+        msg = ("inventory_ml_snapshots returned no rows."
+               if args.model == "m2_inventory" else
+               "the query returned no rows — the source tables may be empty, or every "
                "quotation's stage/status resolved to neither won nor lost.")
         _say(msg, logger)
         if publisher is not None:
             publisher.close("FAILED")
         sys.exit(1)
 
-    _train_and_report(
-        args, frame=frame, tenant=args.tenant, source="db", logger=logger,
-        publisher=publisher,
-        source_name=os.environ.get("MAXXFLOW_DATA_SOURCE_NAME") or "MaXXflow Database",
-        dataset_row_count=len(frame),
-    )
+    report = _train_inventory_and_report if args.model == "m2_inventory" else _train_and_report
+    report(args, frame=frame, tenant=args.tenant, source="db", logger=logger,
+           publisher=publisher,
+           source_name=frame.attrs.get("source_name") or
+                       os.environ.get("MAXXFLOW_DATA_SOURCE_NAME") or "MaXXflow Database",
+           dataset_row_count=len(frame))
 
 
 def cmd_score(args):
@@ -565,8 +599,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp_tc.add_argument("--publish", action="store_true",
                        help="move @champion through the promotion gate if it passes")
     sp_tc.add_argument("--force", action="store_true",
-                       help="override the champion COMPARISON gate; cannot lift the "
-                            "absolute quality floor")
+                       help="override failed model-performance gates")
     sp_tc.add_argument("--no-hpo", action="store_true")
     sp_tc.add_argument("--progress-id", default="",
                        help="correlation id for the live progress feed. The Configurator mints one before submitting so the UI can tail this run; omit it and nothing is published.")
@@ -580,7 +613,8 @@ def build_parser() -> argparse.ArgumentParser:
     # gate refused". A caller should not need to know which source produced a run.
     sp_td = sub.add_parser("train-db")
     sp_td.add_argument("--model", required=True,
-                       choices=["m1_quote_win", "m1_quote_price", "m1_quote_line_win"])
+                       choices=["m1_quote_win", "m1_quote_price", "m1_quote_line_win",
+                                "m2_inventory"])
     sp_td.add_argument("--tenant", default="global",
                        help="names the registered model")
     sp_td.add_argument("--data-tenant", default="",
@@ -589,8 +623,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp_td.add_argument("--publish", action="store_true",
                        help="move @champion through the promotion gate if it passes")
     sp_td.add_argument("--force", action="store_true",
-                       help="override the champion COMPARISON gate; cannot lift the "
-                            "absolute quality floor")
+                       help="override failed model-performance gates")
     sp_td.add_argument("--no-hpo", action="store_true")
     sp_td.add_argument("--progress-id", default="",
                        help="correlation id for the live progress feed. The Configurator mints one before submitting so the UI can tail this run; omit it and nothing is published.")

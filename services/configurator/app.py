@@ -286,6 +286,8 @@ def _champion_card_metadata(registry: MLflowRegistry, serving_name: str) -> dict
                 "MaXXflow Database" if kind == "database" else "CSV Dataset"
             ),
             "row_count": row_count,
+            "fallback_used": str(tags.get("fallback_used", "false")).lower() == "true",
+            "fallback_reason": tags.get("fallback_reason"),
         }
     return {
         "algorithm": tags.get("algorithm"),
@@ -839,6 +841,25 @@ def db_columns(tenant: str, key: str):
     Returns connected=false + an error when the replica isn't reachable (no false
     'connected' banner)."""
     _model_or_404(key)
+    dt = _data_tenant(tenant)
+    if key == "m2_inventory":
+        from m2_inventory.db_training import describe_sources
+
+        note = (
+            "M2 uses real weekly history when available. Otherwise it builds a marked "
+            "bootstrap fallback from current operational inventory so training can complete."
+        )
+        try:
+            rep = describe_sources(dt)
+            rep.update({"model": key, "error": None, "note": note, "data_tenant": dt})
+            return rep
+        except Exception as e:
+            return {"model": key, "connected": False,
+                    "error": f"read replica not reachable ({type(e).__name__}: {e})",
+                    "schema": None, "sources": [], "data_tenant": dt,
+                    "passthrough_columns": [], "derived_features": [],
+                    "trainable": False, "note": note}
+
     from m1_quote import db_features
     note = ("The DB path reads these source tables from the tenant read replica and builds the "
             "gold features at training time; the listed features are DERIVED (never physical "
@@ -848,7 +869,6 @@ def db_columns(tenant: str, key: str):
         return {"model": key, "connected": False, "error": "no DB source spec for this model",
                 "schema": None, "sources": [], "passthrough_columns": [],
                 "derived_features": [], "trainable": False, "note": note}
-    dt = _data_tenant(tenant)
     owner_note = (f" Model owner is '{tenant}' (the shared base model); rows come from "
                   f"tenant '{dt}'.") if dt != tenant else ""
     try:
@@ -882,7 +902,7 @@ def read_data_from_mrp(tenant: str, key: str, payload: dict | None = None):
     Cost: this builds the full frame, so it is as slow as the feature step of a
     training run (seconds on a demo tenant). It is a POST for that reason — it
     is work, not a lookup — and the response carries ``rows`` for the true size
-    with ``sample`` capped at ``limit``.
+    with independently paginated columns and sample rows.
 
     Errors come back 200 with ``ok: false``, matching db-columns, so the wizard
     renders a banner instead of a network failure.
@@ -890,9 +910,18 @@ def read_data_from_mrp(tenant: str, key: str, payload: dict | None = None):
     _model_or_404(key)
     payload = payload or {}
     try:
-        limit = max(1, min(int(payload.get("limit", 25)), 200))
+        columns_page = int(payload.get("columns_page", 1))
+        sample_page = int(payload.get("sample_page", 1))
+        sample_page_size = int(
+            payload.get("sample_page_size", payload.get("limit", 5))
+        )
     except (TypeError, ValueError):
-        limit = 25
+        raise HTTPException(400, "pagination values must be integers")
+    if columns_page < 1 or sample_page < 1:
+        raise HTTPException(400, "pagination pages must be at least 1")
+    if sample_page_size not in _SAMPLE_PREVIEW_PAGE_SIZES:
+        allowed = ", ".join(str(size) for size in _SAMPLE_PREVIEW_PAGE_SIZES)
+        raise HTTPException(400, f"sample_page_size must be one of: {allowed}")
 
     if key not in jobs.db_models():
         return {"ok": False, "model": key, "tenant": tenant,
@@ -909,27 +938,48 @@ def read_data_from_mrp(tenant: str, key: str, payload: dict | None = None):
                 "error": f"{type(e).__name__}: {e}",
                 "rows": 0, "columns": [], "dtypes": {}, "sample": []}
 
-    rows, cols = int(len(df)), list(df.columns)
+    rows, all_columns = int(len(df)), list(df.columns)
+    columns, columns_pagination = _preview_page(
+        all_columns, columns_page, _COLUMN_PREVIEW_PAGE_SIZE,
+    )
+    sample_start = (sample_page - 1) * sample_page_size
+    sample = json.loads(
+        df.iloc[sample_start:sample_start + sample_page_size].to_json(orient="records")
+    )
+    _, sample_pagination = _preview_page(range(rows), sample_page, sample_page_size)
     # Empty is not an error — it is the single most useful thing this endpoint
     # can tell you, and it is invisible from a row count on the source tables.
     if rows == 0:
-        message = (f"The query ran against tenant_{dt} and returned no rows. "
-                   "The source tables have data, so the "
-                   "loss is in the join or the label filter — most often quotations whose "
-                   "stage/status never resolved to won or lost.")
+        message = (f"The query ran against tenant_{dt} and returned no training rows."
+                   if key == "m2_inventory" else
+                   f"The query ran against tenant_{dt} and returned no rows. The source tables "
+                   "have data, so the loss is in the join or the label filter — most often "
+                   "quotations whose stage/status never resolved to won or lost.")
     else:
-        message = (f"{rows} rows x {len(cols)} columns built from schema "
+        message = (f"{rows} rows x {len(all_columns)} columns built from schema "
                    f"tenant_{dt}.")
 
     return {
         "ok": True, "model": key, "tenant": tenant, "data_tenant": dt,
-        "rows": rows, "columns": cols,
-        "dtypes": {c: str(t) for c, t in df.dtypes.items()},
-        # to_json, not to_dict: NaN is not valid JSON and to_dict leaves it as
-        # float('nan'), which 500s the response. Same reason as retrain/preview.
-        "sample": json.loads(df.head(limit).to_json(orient="records")),
-        "sample_size": min(rows, limit),
-        "truncated": rows > limit,
+        "rows": rows, "columns": columns,
+        "dtypes": {c: str(df.dtypes[c]) for c in columns},
+        "sample": sample,
+        "sample_size": len(sample),
+        "truncated": sample_pagination["total_pages"] > 1,
+        "pagination": {
+            "columns": columns_pagination,
+            "sample": {
+                **sample_pagination,
+                "allowed_page_sizes": list(_SAMPLE_PREVIEW_PAGE_SIZES),
+            },
+        },
+        "data_source": {
+            "kind": "database",
+            "name": df.attrs.get("source_name", "MaXXflow Database"),
+            "row_count": rows,
+            "fallback_used": bool(df.attrs.get("fallback_used")),
+            "fallback_reason": df.attrs.get("fallback_reason"),
+        },
         "elapsed_s": round(time.perf_counter() - t0, 2),
         "message": message,
     }
