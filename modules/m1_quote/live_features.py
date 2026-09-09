@@ -13,6 +13,14 @@ from __future__ import annotations
 
 from m1_quote.raw_ingest import price_ratio_for
 
+DEFAULT_LIST_PRICE_MARKUP = 0.67
+_PAYMENT_TERM_MODEL_VALUES = {
+    "immediate payment": "Immediate",
+    "immediate": "Immediate",
+    "15 days": "15 Days",
+    "21 days": "21 Days",
+}
+
 
 def _rate(lookup: dict, key) -> float:
     """Look up a customer/rep's historical win-rate; unknown/blank key -> global rate."""
@@ -86,10 +94,18 @@ def _first_positive(*values) -> float | None:
     return None
 
 
+def _payment_term_for_model(value):
+    """Translate fixed UI labels to the category spelling used during training."""
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    return _PAYMENT_TERM_MODEL_VALUES.get(text.lower(), text)
+
+
 def line_win_features_from_raw(header: dict, lines: list[dict], rate_lookup: dict) -> list[dict]:
     """m1_quote_line_win predicts a win probability PER LINE ITEM (one feature row
     per line, like price_features_from_raw) — but unlike the price model, the
-    ratio here is the line's OWN proposed price_ratio (effective_price/unitPrice),
+    ratio here is the line's OWN proposed price_ratio (effective_price/listPrice),
     the same signal quote_features_from_raw aggregates across the whole quote,
     just kept per-line instead. header: customerID, salesRepID, region, industry,
     leadTimeDays, paymentTerms?. lines: [{productID, quantity, unitPrice,
@@ -116,14 +132,21 @@ def line_win_features_from_raw(header: dict, lines: list[dict], rate_lookup: dic
         # A blank or zero sale price used to sail through as effective=0, i.e.
         # price_ratio 0 — "given away free" — which the win model reads as the
         # cheapest price it has ever seen and scores accordingly. Fall back to
-        # unit cost (ratio 1.0) instead of inventing a giveaway.
+        # unit cost instead of inventing a giveaway. The ratio is calculated
+        # against the supplied/derived list price below.
         effective = _first_positive(ln.get("negotiatedSalesPrice"), ln.get("salesPrice"))
         if effective is None:
             effective = unit_price
-        # Same basis as training: against LIST price when the caller supplies one,
-        # else against cost. Computed by the shared helper in raw_ingest so the two
-        # paths cannot diverge (they did once — see price_ratio_for's docstring).
-        ratio, _basis = price_ratio_for(effective, ln.get("listPrice"), unit_price)
+        # MaXXflow's live quote payload does not always carry catalogue list price.
+        # Keep that implementation detail server-side: when absent/blank/non-positive,
+        # derive list = unit cost + 67% of unit cost. An explicitly supplied positive
+        # list price still wins for API clients that have one.
+        list_price = _first_positive(ln.get("listPrice"))
+        if list_price is None:
+            list_price = unit_price + (DEFAULT_LIST_PRICE_MARKUP * unit_price)
+        # Same basis as training: the ratio and the price-band basis must use the
+        # identical list price, whether supplied or derived.
+        ratio, _basis = price_ratio_for(effective, list_price, unit_price)
         effective_prices.append(effective)
         rec = {
             "productID": ln.get("productID", ""),
@@ -135,16 +158,16 @@ def line_win_features_from_raw(header: dict, lines: list[dict], rate_lookup: dic
             "industry": header.get("industry", ""),
             "contact_win_rate": contact_rate,
             "salesrep_win_rate": salesrep_rate,
+            "list_price": list_price,
         }
         # optional, only when the caller supplied them — an absent key is filled
         # with the TRAINING median/unknown level by LineWinModel._coerce, which is
         # a better default than a zero invented here
-        if _first_positive(ln.get("listPrice")) is not None:
-            rec["list_price"] = float(ln["listPrice"])
         if ln.get("materialSpec") not in (None, ""):
             rec["product_type"] = ln["materialSpec"]
-        if header.get("paymentTerms") not in (None, ""):
-            rec["payment_terms"] = header["paymentTerms"]
+        payment_term = _payment_term_for_model(header.get("paymentTerms"))
+        if payment_term is not None:
+            rec["payment_terms"] = payment_term
         quantities.append(rec["quantity"])
         records.append(rec)
 

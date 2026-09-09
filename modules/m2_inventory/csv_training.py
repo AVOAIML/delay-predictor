@@ -117,8 +117,11 @@ def train_all_csv_models(
     registry: MLflowRegistry | None = None,
     train_fraction: float = 0.70,
     calibration_fraction: float = 0.15,
+    logger=None,
 ) -> dict:
     """Train all candidates and select the most trustworthy final-risk model."""
+    if logger is not None:
+        logger.set_progress(10, "preparing_data", "Preparing inventory training data")
     builder = InventoryDatasetBuilder()
     snapshots = builder.load(dataset_path)
     supervised = builder.build_supervised_frame(snapshots)
@@ -130,7 +133,19 @@ def train_all_csv_models(
     )
     active_registry = (registry or MLflowRegistry()) if register else None
     results = []
-    for model_class in model_classes():
+    candidates = model_classes()
+    total_candidates = len(candidates)
+    for index, model_class in enumerate(candidates, start=1):
+        if logger is not None:
+            label = f"Candidate {index} of {total_candidates}"
+            logger.set_progress(
+                15 + (index - 1) * 65 / total_candidates,
+                "training_candidates",
+                label,
+                current=index,
+                total=total_candidates,
+                message=f"{label}: training {model_class.__name__}",
+            )
         _, metrics = _fit_and_save(
             model_class,
             split,
@@ -141,6 +156,16 @@ def train_all_csv_models(
             registry=active_registry,
         )
         results.append(metrics)
+        if logger is not None:
+            logger.set_progress(
+                15 + index * 65 / total_candidates,
+                "training_candidates",
+                f"Candidate {index} of {total_candidates}",
+                current=index,
+                total=total_candidates,
+                message=(f"Candidate {index}/{total_candidates} complete: "
+                         f"{metrics.get('algorithm', model_class.__name__)}"),
+            )
 
     # The dashboard consumes 30/60-day probabilities, so select on their mean
     # Brier score first. Weekly ECE and AUC break ties and remain diagnostics.
@@ -156,6 +181,8 @@ def train_all_csv_models(
         eligible or results,
         key=selection_key,
     )
+    if logger is not None:
+        logger.set_progress(85, "selecting_candidate", "Selecting the best candidate")
     summary = {
         "selected_model": winner["algorithm"],
         "target_definition": "stockout_flag at t+1 conditional on no stockout at t",
@@ -171,9 +198,9 @@ def train_all_csv_models(
             None
             if eligible
             else "All 4 candidates failed the absolute MLflow quality floor; "
-            f"{winner['algorithm']} is shown for review only, not a usable model. "
-            "Publish will refuse it (the floor cannot be forced) and the current "
-            "champion — or no model at all, if none exists yet — keeps serving."
+            f"{winner['algorithm']} is shown for review with its failed checks. "
+            "Normal publish will refuse it; a user may explicitly force publish "
+            "and the override will remain visible in the audit trail."
         ),
     }
     if register:
@@ -191,6 +218,8 @@ def train_all_csv_models(
         json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8"
     )
     _write_horizon_calibration_tables(output_dir, winner)
+    if logger is not None:
+        logger.set_progress(95, "registering_candidate", "Candidate model registered")
     return summary
 
 
@@ -231,6 +260,7 @@ def train_for_configurator(
         random_state,
         tenant=tenant,
         register=register,
+        logger=logger,
     )
     winner = summary["metrics"]
     if logger is not None:
@@ -243,7 +273,8 @@ def train_for_configurator(
             logger.log(
                 f"None of the four candidates cleared the quality floor. Best of "
                 f"a bad set is {summary['selected_model']} (weekly AUC "
-                f"{winner['weekly_auc']:.3f}) — not eligible to publish."
+                f"{winner['weekly_auc']:.3f}) — normal publish is blocked; an "
+                f"explicit user force-publish can override the performance floor."
             )
         if summary.get("selection_warning"):
             logger.log(f"Quality gate: {summary['selection_warning']}")

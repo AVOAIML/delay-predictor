@@ -39,6 +39,7 @@ This file is the happy path; that is the post-mortem.
 
 from __future__ import annotations
 
+import json
 import time
 
 from maxxflow_core.errors import get_logger
@@ -47,6 +48,7 @@ log = get_logger("mlops.progress")
 
 EXPERIMENT = "m1-configurator-progress"
 ARTIFACT = "progress.log"
+STATE_ARTIFACT = "progress.json"
 TAG = "maxxflow.progress_id"
 _FLUSH_SECONDS = 3.0
 
@@ -77,6 +79,7 @@ class ProgressPublisher:
     def __init__(self, progress_id: str, *, flush_seconds: float = _FLUSH_SECONDS) -> None:
         self.progress_id = progress_id
         self.lines: list[str] = []
+        self.progress_state: dict | None = None
         self._flush_seconds = flush_seconds
         self._last_flush = 0.0
         self._run_id: str | None = None
@@ -103,11 +106,22 @@ class ProgressPublisher:
         if time.monotonic() - self._last_flush >= self._flush_seconds:
             self.flush()
 
+    def update_progress(self, progress: dict) -> None:
+        if self._dead:
+            return
+        self.progress_state = dict(progress)
+        if time.monotonic() - self._last_flush >= self._flush_seconds:
+            self.flush()
+
     def flush(self) -> None:
-        if self._dead or self._run_id is None or not self.lines:
+        if self._dead or self._run_id is None or (not self.lines and self.progress_state is None):
             return
         try:
-            _client().log_text(self._run_id, "\n".join(self.lines), ARTIFACT)
+            client = _client()
+            if self.lines:
+                client.log_text(self._run_id, "\n".join(self.lines), ARTIFACT)
+            if self.progress_state is not None:
+                client.log_text(self._run_id, json.dumps(self.progress_state), STATE_ARTIFACT)
             self._last_flush = time.monotonic()
         except Exception as e:
             self._dead = True
@@ -163,3 +177,27 @@ def read_progress(progress_id: str) -> list[str]:
         # yet) and must not surface as an error in the Train page.
         log.debug("no progress for %s (%s: %s)", progress_id, type(e).__name__, e)
         return []
+
+
+def read_progress_state(progress_id: str) -> dict | None:
+    """Read the latest structured progress snapshot for an Azure ML job."""
+    try:
+        import mlflow
+
+        client = _client()
+        exp = client.get_experiment_by_name(EXPERIMENT)
+        if exp is None:
+            return None
+        runs = client.search_runs([exp.experiment_id],
+                                  filter_string=f"tags.`{TAG}` = '{progress_id}'",
+                                  max_results=1)
+        if not runs:
+            return None
+        text = mlflow.artifacts.load_text(
+            f"runs:/{runs[0].info.run_id}/{STATE_ARTIFACT}"
+        )
+        value = json.loads(text)
+        return value if isinstance(value, dict) else None
+    except Exception as e:
+        log.debug("no progress state for %s (%s: %s)", progress_id, type(e).__name__, e)
+        return None

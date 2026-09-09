@@ -63,8 +63,11 @@ _AML_STATUS = {
 
 class TrainingBackend(Protocol):
     def start(self, tenant: str, model_key: str, *, source: str, csv_path: str | None,
-              auto_hpo: bool, data_tenant: str | None = None) -> str: ...
+              auto_hpo: bool, data_tenant: str | None = None,
+              source_name: str | None = None,
+              dataset_row_count: int | None = None) -> str: ...
     def status(self, run_id: str) -> dict: ...
+    def active_runs(self, tenant: str) -> list[dict]: ...
 
 
 class AzureMLBackend:
@@ -110,7 +113,9 @@ class AzureMLBackend:
                         s.aml_resource_group, s.aml_workspace)
 
     def start(self, tenant: str, model_key: str, *, source: str, csv_path: str | None,
-              auto_hpo: bool, data_tenant: str | None = None) -> str:
+              auto_hpo: bool, data_tenant: str | None = None,
+              source_name: str | None = None,
+              dataset_row_count: int | None = None) -> str:
         if source == "csv" and not csv_path:
             raise ValueError("source='csv' needs a csv_path")
         if source not in ("csv", "db"):
@@ -138,6 +143,9 @@ class AzureMLBackend:
         # "this process knows its name" in which a running job's progress could
         # not be looked up. See libs/maxxflow_mlops/progress.py.
         progress_id = uuid.uuid4().hex[:12]
+        resolved_source_name = source_name or (
+            "MaXXflow Database" if source == "db" else str(csv_path).rsplit("/", 1)[-1]
+        )
         if source == "csv":
             cmd = ["maxxflow train-csv", f"--model {model_key}", "--csv ${{inputs.csv}}",
                    f"--tenant {tenant}", f"--mlflow-uri {s_uri}",
@@ -180,6 +188,9 @@ class AzureMLBackend:
                 "MAXXFLOW_MLFLOW_URI": s.mlflow_tracking_uri,
                 "MLFLOW_TRACKING_URI": s.mlflow_tracking_uri,
                 "MODEL_ALIAS": s.model_alias,
+                "MAXXFLOW_DATA_SOURCE_NAME": resolved_source_name,
+                **({"MAXXFLOW_DATASET_ROW_COUNT": str(dataset_row_count)}
+                   if dataset_row_count is not None else {}),
                 # Postgres connection PARTS, and the LOCATION of the password.
                 # PGPASS is deliberately absent: environment_variables are stored
                 # with the job and shown in Studio, so a password here would
@@ -226,9 +237,12 @@ class AzureMLBackend:
         run_id = submitted.name
         self._runs[run_id] = {"tenant": tenant, "model_key": model_key, "source": source,
                               "data_tenant": data_tenant or tenant,
+                              "source_name": resolved_source_name,
+                              "dataset_row_count": dataset_row_count,
                               "started_at": time.time(), "studio_url": _studio_url(submitted),
                               "version_before": version_before,
-                              "progress_id": progress_id, "failure_log": None}
+                              "progress_id": progress_id, "failure_log": None,
+                              "last_status": "running"}
         log.info("submitted AML job %s for %s/%s", run_id, tenant, model_key)
         return run_id
 
@@ -244,11 +258,19 @@ class AzureMLBackend:
         try:
             job = self._client().jobs.get(run_id)
         except Exception as e:
+            meta["last_status"] = "error"
+            meta.setdefault("finished_at", time.time())
             return {"run_id": run_id, "status": "error",
                     "error": f"could not reach Azure ML: {type(e).__name__}: {e}",
-                    "logs": [], **_common(meta, run_id)}
+                    "logs": [],
+                    "progress": {"percent": 0, "phase": "error",
+                                 "label": "Could not reach Azure ML",
+                                 "current": None, "total": None},
+                    **_common(meta, run_id)}
 
         status = _AML_STATUS.get(job.status, "running")
+        if status != "running":
+            meta.setdefault("finished_at", time.time())
         # Header first, then the job's OWN lines. The header is the platform's
         # view (queued / provisioning / running); the feed is the training's view.
         # A queued job legitimately has no feed yet — serverless spends its first
@@ -257,10 +279,27 @@ class AzureMLBackend:
         if meta.get("studio_url"):
             header.append(f"Studio: {meta['studio_url']}")
         feed = _progress_lines(meta.get("progress_id"))
+        progress = _progress_state(meta.get("progress_id"))
+        if progress is None:
+            if status == "done":
+                progress = {"percent": 100, "phase": "complete", "label": "Training complete",
+                            "current": None, "total": None}
+            elif status == "error":
+                progress = {"percent": 0, "phase": "error", "label": f"Azure ML: {job.status}",
+                            "current": None, "total": None}
+            else:
+                progress = {
+                    "percent": 0,
+                    "phase": "queued" if job.status != "Running" else "starting",
+                    "label": f"Azure ML: {job.status}",
+                    "current": None,
+                    "total": None,
+                }
         if not feed and status == "running":
             header.append("waiting for the job to start — serverless compute provisions "
                           "a VM first, so there is nothing to report yet")
-        out = {"status": status, "logs": header + feed, **_common(meta, run_id)}
+        out = {"status": status, "logs": header + feed, "progress": progress,
+               **_common(meta, run_id)}
         if status == "done":
             result = _latest_registered(meta["tenant"], meta["model_key"],
                                         after=meta.get("version_before", 0))
@@ -289,7 +328,22 @@ class AzureMLBackend:
             if meta["failure_log"]:
                 out["logs"] = out["logs"] + ["", "--- cluster log (last lines) ---",
                                              *meta["failure_log"]]
+        meta["last_status"] = out["status"]
         return out
+
+    def active_runs(self, tenant: str) -> list[dict]:
+        """Refresh and return this process's currently active tenant runs."""
+        candidates = [
+            (run_id, meta) for run_id, meta in self._runs.items()
+            if meta["tenant"] == tenant and meta.get("last_status") == "running"
+        ]
+        candidates.sort(key=lambda item: item[1]["started_at"], reverse=True)
+        active = []
+        for run_id, _ in candidates:
+            current = self.status(run_id)
+            if current.get("status") == "running":
+                active.append(current)
+        return active
 
     def _cluster_log_tail(self, run_id: str, *, lines: int = 40) -> list[str]:
         """The tail of the job's std_log.txt, or a note saying why there is none.
@@ -338,10 +392,33 @@ def _progress_lines(progress_id: str | None) -> list[str]:
         return []
 
 
+def _progress_state(progress_id: str | None) -> dict | None:
+    if not progress_id:
+        return None
+    try:
+        from maxxflow_mlops.progress import read_progress_state
+        return read_progress_state(progress_id)
+    except Exception as e:
+        log.debug("progress state unavailable for %s (%s: %s)",
+                  progress_id, type(e).__name__, e)
+        return None
+
+
 def _common(meta: dict, run_id: str) -> dict:
+    elapsed_until = meta.get("finished_at") or time.time()
+    source = meta["source"]
+    kind = "database" if source == "db" else "csv"
     return {"run_id": run_id, "tenant": meta["tenant"], "model_key": meta["model_key"],
-            "source": meta["source"],
-            "elapsed_s": round(time.time() - meta["started_at"], 1)}
+            "source": source,
+            "data_source": {
+                "kind": kind,
+                "name": meta.get("source_name") or (
+                    "MaXXflow Database" if kind == "database" else "CSV Dataset"
+                ),
+                "row_count": meta.get("dataset_row_count"),
+            },
+            "elapsed_s": round(elapsed_until - meta["started_at"], 1),
+            "started_at": meta["started_at"]}
 
 
 def _studio_url(job) -> str | None:
@@ -440,12 +517,19 @@ class _ThreadBackend:
         self._jobs = jobs_module
 
     def start(self, tenant: str, model_key: str, *, source: str, csv_path: str | None,
-              auto_hpo: bool, data_tenant: str | None = None) -> str:
+              auto_hpo: bool, data_tenant: str | None = None,
+              source_name: str | None = None,
+              dataset_row_count: int | None = None) -> str:
         return self._jobs.start(tenant, model_key, source=source, csv_path=csv_path,
-                                auto_hpo=auto_hpo, data_tenant=data_tenant)
+                                auto_hpo=auto_hpo, data_tenant=data_tenant,
+                                source_name=source_name,
+                                dataset_row_count=dataset_row_count)
 
     def status(self, run_id: str) -> dict:
         return self._jobs.status(run_id)
+
+    def active_runs(self, tenant: str) -> list[dict]:
+        return self._jobs.active_runs(tenant)
 
 
 _AML_SINGLETON: AzureMLBackend | None = None

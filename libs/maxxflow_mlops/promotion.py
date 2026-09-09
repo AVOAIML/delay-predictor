@@ -57,21 +57,15 @@ So is a metric we have but cannot trust at this sample size; see
 
 ON FORCE
 --------
-``force=True`` lets a human ship a candidate the COMPARISON gates would refuse:
-a tie, or a deliberate rollback to a weaker-but-simpler model. It does not lift
-the absolute floor, and it does not lift ``data_validation_passed=False``. Both
-of those say the candidate is broken rather than merely "not better", and there
-is no version of a human decision that makes a zero-skill model safe to serve.
+``force=True`` is an explicit human decision to ship a candidate even when a
+performance check fails. It overrides both champion-comparison checks and the
+absolute performance floor. The failed checks remain in the returned audit
+trail, together with a force-override check, so the API never represents a weak
+model as having passed its quality gates.
 
-An earlier draft did let force override the floor, to leave room for a demo
-publish. Two things closed that door. The floor is the ONLY check standing
-between an empty registry and a zero-skill champion — force against it is
-exactly the case the floor exists for, not an exception to it. And the reason a
-person would reach for force here has been removed: the floor no longer fails on
-a statistic it cannot measure, so a refusal now always means the model is
-genuinely bad. To demo a model that does not clear the floor, move the alias
-directly with ``MLflowRegistry.promote`` — an explicit, auditable act that does
-not require teaching the gate to say yes to bad models.
+Force does not override ``data_validation_passed=False``. Invalid/unusable input
+data is not a model-performance choice and can fail before a trustworthy model
+artifact exists to publish.
 """
 
 from __future__ import annotations
@@ -102,8 +96,8 @@ ECE_ABS_MAX = 0.05
 #
 # The median tracks 1/sqrt(n_test) almost exactly. Below ~1200 rows the check
 # measures the holdout, not the model, so it is reported UNMEASURABLE rather
-# than failed — a hard stop that fires on noise is worse than no hard stop,
-# and force can no longer be used to escape one.
+# than failed — even though a user can explicitly force a publish, the normal
+# gate must not create a false failure from measurement noise.
 #
 # The other two floor checks need no such guard: both compare the model against
 # a baseline computed on the SAME rows, so the noise largely cancels and they
@@ -277,8 +271,8 @@ def evaluate_quality_floor(candidate: dict, *, ece_tau: float = 0.05) -> list[di
                                  f"Brier {brier:.4f} >= {zero_skill:.4f}, the score a constant "
                                  f"predictor at the {rate:.4f} base rate would get — the "
                                  f"probability carries no information"))
-    # Tag every floor check so _verdict can tell a floor failure from a
-    # comparison failure. force lifts the second and not the first.
+    # Tag floor checks so the returned audit trail distinguishes absolute
+    # performance failures from champion-comparison failures.
     for c in checks:
         c["floor"] = True
     return checks
@@ -294,24 +288,16 @@ def _verdict(checks: list[dict], *, force: bool) -> PromotionDecision:
     reasons = [c["detail"] for c in failed] + [c["detail"] for c in passed]
     if not failed:
         return PromotionDecision(True, reasons, checks=checks)
-    # A FLOOR failure is a hard stop, like data_validation. force means "ship
-    # something not measurably BETTER" — a tie, a deliberate rollback to a
-    # simpler model. It has never meant "ship something not measurably WORKING",
-    # and the floor is the only thing standing between an empty registry and a
-    # zero-skill champion. Since the floor no longer fails on statistics it
-    # cannot trust (see ECE_FLOOR_MIN_ROWS), there is no legitimate publish left
-    # for force to rescue here.
-    floor_failed = [c for c in failed if c.get("floor")]
-    if force and floor_failed:
-        note = _check("force", False,
-                      f"force does NOT override the absolute floor — {floor_failed[0]['detail']}")
-        return PromotionDecision(False, [note["detail"]] + reasons,
-                                 blocker=note["detail"], checks=checks + [note])
     if force:
-        # An explicit human override of the COMPARISON gates — NOT of
-        # data_validation_passed or the floor, both hard stops.
-        return PromotionDecision(True, [f"forced publish — overriding gate: {failed[0]['detail']}"]
-                                 + reasons, blocker=None, checks=checks)
+        # Preserve every failed performance check and add an explicit audit
+        # record showing that a human chose to override them.
+        detail = (
+            "forced publish — user overrode failed performance gate(s): "
+            + ", ".join(c["name"] for c in failed)
+        )
+        note = _check("force", True, detail)
+        return PromotionDecision(True, [detail] + reasons, blocker=None,
+                                 checks=checks + [note])
     return PromotionDecision(False, reasons, blocker=failed[0]["detail"], checks=checks)
 
 

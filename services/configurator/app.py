@@ -1,7 +1,6 @@
 """ML Model Configurator API (FastAPI) — backs the Configurator UI.
 
-Endpoints (M1 Smart Quote Optimiser: three model cards — quote-level Classification,
-Regression price band, and per-product line-level Classification):
+Endpoints (public Configurator cards: Smart Quote Optimiser and Predictive Inventory Alerts):
   GET  /api/{tenant}/models                         list cards + status/metrics
   GET  /api/{tenant}/models/{key}/predict-schema    fields for the Test-Predictions sidebar
   POST /api/{tenant}/models/{key}/predict           run a what-if prediction
@@ -22,10 +21,13 @@ import os
 import tempfile
 import time
 import uuid
+from collections.abc import Sequence
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 import pandas as pd
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -83,13 +85,16 @@ async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
                         content={"detail": f"{type(exc).__name__}: {exc}"})
 _UPLOADS = Path(tempfile.gettempdir()) / "mxf_uploads"
 _UPLOADS.mkdir(exist_ok=True)
+_COLUMN_PREVIEW_PAGE_SIZE = 8
+_SAMPLE_PREVIEW_PAGE_SIZES = (5, 10, 50, 100)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _INVENTORY_CSV = _REPO_ROOT / "dataset" / "M2data" / "all_verticals_full.csv"
 _INVENTORY_ARTIFACTS = _REPO_ROOT / "artifacts" / "m2_inventory"
 
-# --- model catalogue (M1 = three cards) --------------------------------------
+# --- model definitions + public catalogue -----------------------------------
 def _num(n): return {"name": n, "type": "number"}
 def _cat(n): return {"name": n, "type": "category"}
+_PAYMENT_TERM_OPTIONS = ["Immediate Payment", "15 days", "21 days"]
 
 MODELS = {
     "m1_quote_win": {
@@ -128,7 +133,7 @@ MODELS = {
         "primary_metric": "coverage",
     },
     "m1_quote_line_win": {
-        "title": "Smart Quote Optimiser — Per-Product Win & Price", "model_type": "Classification Model",
+        "title": "Smart Quote Optimiser", "model_type": "Classification Model",
         "description": "Predicts a calibrated Win Probability, recommended Price Band and a "
                        "Confidence Level for EACH product line in a quote — not just the quote "
                        "overall (unlike m1_quote_win). Ground truth is only recorded per quotation, "
@@ -156,11 +161,16 @@ MODELS = {
         # NB: no grandTotal here. quote_total is SUMMED FROM THE LINES by
         # live_features (same formula raw_ingest uses at training time), so the
         # user never types a quote total that the Products table already implies.
-        "header_fields": [_cat("customerID"), _cat("salesRepID"), _cat("region"), _cat("industry"),
-                           _num("leadTimeDays"), _cat("paymentTerms")],
-        # listPrice matters: the model measures price against LIST when the training
-        # export had one. A call without it is scored on a different scale than the
-        # model learned, which reads as a confident answer and is not one.
+        "header_fields": [
+            _cat("customerID"), _cat("salesRepID"), _cat("region"),
+            _num("leadTimeDays"),
+            {"name": "paymentTerms", "type": "category",
+             "options": _PAYMENT_TERM_OPTIONS},
+        ],
+        # listPrice is intentionally absent from the client-facing schema. Live
+        # feature building derives it as unitPrice + 67% when an API caller does not
+        # supply one, so the model still scores on a list-price basis without asking
+        # a salesperson for an unavailable field.
         # negotiatedSalesPrice and materialSpec are deliberately NOT collected on this
         # card. MaXXFlow records a single client-facing price rather than a separate
         # negotiated figure, and materialSpec is product master data a rep should not
@@ -168,7 +178,7 @@ MODELS = {
         # breaks nothing — product_type just falls back to the unknown level on a
         # champion that happened to be trained with it.
         "line_fields": [_cat("productID"), _num("quantity"), _num("unitPrice"),
-                         _num("salesPrice"), _num("listPrice")],
+                         _num("salesPrice")],
         "primary_metric": "accuracy",
     },
     "m1_quote_mil": {
@@ -216,6 +226,16 @@ MODELS = {
     },
 }
 
+# Only these two capabilities are public in the Configurator. Keep the other M1
+# definitions private because Smart Quote's bundled prediction still reads the
+# existing price champion internally; they must not appear in GET /models or be
+# addressable through the generic model endpoints.
+_INTERNAL_MODELS = MODELS
+MODELS = {
+    key: _INTERNAL_MODELS[key]
+    for key in ("m1_quote_line_win", "m2_inventory")
+}
+
 
 def _model_or_404(key: str) -> dict:
     if key not in MODELS:
@@ -244,6 +264,36 @@ def _data_tenant(tenant: str) -> str:
     return get_settings().default_tenant if tenant == GLOBAL_TENANT else tenant
 
 
+def _champion_card_metadata(registry: MLflowRegistry, serving_name: str) -> dict:
+    """Card metadata belongs to the live champion, never the newest candidate."""
+    try:
+        tags = registry.get_alias_tags(name=serving_name, alias="champion")
+    except Exception:
+        tags = {}
+    kind = tags.get("data_source_kind") or tags.get("data_provenance")
+    kind = "database" if kind == "db" else kind
+    if kind not in ("csv", "database"):
+        data_source = None
+    else:
+        raw_count = tags.get("dataset_row_count")
+        try:
+            row_count = int(raw_count) if raw_count is not None else None
+        except (TypeError, ValueError):
+            row_count = None
+        data_source = {
+            "kind": kind,
+            "name": tags.get("data_source_name") or (
+                "MaXXflow Database" if kind == "database" else "CSV Dataset"
+            ),
+            "row_count": row_count,
+        }
+    return {
+        "algorithm": tags.get("algorithm"),
+        "data_source": data_source,
+        "published_at": tags.get("published_at"),
+    }
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -252,6 +302,15 @@ def health():
 @app.get("/api/{tenant}/models")
 def list_models(tenant: str):
     reg = MLflowRegistry()
+    try:
+        active_by_model = {
+            run["model_key"]: run
+            for run in reversed(get_training_backend().active_runs(tenant))
+        }
+    except Exception:
+        # Model discovery must remain available if the training backend itself is
+        # temporarily unreachable. The Train screen will surface its detailed error.
+        active_by_model = {}
     cards = []
     for key, m in MODELS.items():
         own = registered_model_name(tenant, key)
@@ -264,6 +323,18 @@ def list_models(tenant: str):
             _INVENTORY_ARTIFACTS / "training_summary.json"
         ).exists():
             status = "CSV model ready"
+        card_metadata = (_champion_card_metadata(reg, serving_name) if resolved else {
+            "algorithm": None, "data_source": None, "published_at": None,
+        })
+        active = active_by_model.get(key)
+        training = None if active is None else {
+            "run_id": active["run_id"],
+            "status": active["status"],
+            "progress": active.get("progress"),
+            "elapsed_s": active.get("elapsed_s", 0),
+            "started_at": active.get("started_at"),
+            "data_source": active.get("data_source"),
+        }
         cards.append({
             "key": key, "title": m["title"], "model_type": m["model_type"],
             "description": m["description"], "predicts": m["predicts"],
@@ -271,6 +342,8 @@ def list_models(tenant: str):
             "registered_name": own,          # where THIS tenant's training registers
             "serving_name": serving_name,     # what currently answers predictions
             "base_model": is_base,            # True = served by the shared global base
+            "training": training,              # active challenger, independent of champion
+            **card_metadata,
         })
     return {"tenant": tenant, "models": cards}
 
@@ -330,7 +403,10 @@ def _enrich_options(fields: list[dict], cats: dict) -> list[dict]:
     out = [dict(f) for f in fields]
     for f in out:
         vocab = cats.get(f["name"]) or cats.get(_FIELD_TO_FEATURE.get(f["name"], ""))
-        if f["type"] == "category" and vocab is not None:
+        # Explicit business-approved choices (currently paymentTerms) take
+        # precedence over whatever spelling happens to be stored in an older
+        # champion's category vocabulary.
+        if f["type"] == "category" and vocab is not None and not f.get("options"):
             f["options"] = [str(c) for c in vocab][:200]
     return out
 
@@ -436,7 +512,8 @@ def _predict_line_win_bundle(tenant: str, header: dict, lines: list[dict], rate_
     price_preds = None
     if price_loaded is not None:
         _, _, price_model = price_loaded
-        price_df = _coerce(pd.DataFrame(price_records), MODELS["m1_quote_price"]["fields"])
+        price_df = _coerce(pd.DataFrame(price_records),
+                           _INTERNAL_MODELS["m1_quote_price"]["fields"])
         price_preds = price_model.predict(price_df).to_dict(orient="records")
 
     predictions = []
@@ -523,14 +600,15 @@ def _predict_mil_bundle(tenant: str, header: dict, lines: list[dict], rate_looku
         raise HTTPException(409, "no published (champion) model yet for m1_quote_mil, and no "
                                  "global base model to fall back to — train and publish first")
     mil_name, mil_is_base, mil_model = mil_loaded
-    mil_df = _coerce(pd.DataFrame(mil_records), MODELS["m1_quote_mil"]["fields"])
+    mil_df = _coerce(pd.DataFrame(mil_records), _INTERNAL_MODELS["m1_quote_mil"]["fields"])
     mil_preds = mil_model.predict(mil_df).to_dict(orient="records")
 
     price_loaded = _load_champion(reg, tenant, "m1_quote_price")
     price_preds = None
     if price_loaded is not None:
         _, _, price_model = price_loaded
-        price_df = _coerce(pd.DataFrame(price_records), MODELS["m1_quote_price"]["fields"])
+        price_df = _coerce(pd.DataFrame(price_records),
+                           _INTERNAL_MODELS["m1_quote_price"]["fields"])
         price_preds = price_model.predict(price_df).to_dict(orient="records")
 
     predictions = []
@@ -573,6 +651,11 @@ def predict_schema_raw(tenant: str, key: str):
     if "header_fields" not in m:
         raise HTTPException(400, f"{key} has no raw test-input schema yet")
     cats, graph = _champion_categories(tenant, key), _load_option_graph()
+    if key == "m1_quote_line_win":
+        # productID used to cascade from industry. Industry is no longer a Test
+        # Prediction input, so do not return a dependency on a field that the form
+        # cannot render; the full product vocabulary remains available.
+        graph = {name: spec for name, spec in graph.items() if name != "productID"}
     return {"model": key,
             "header_fields": _apply_option_graph(_enrich_options(m["header_fields"], cats), graph),
             "line_fields": _apply_option_graph(_enrich_options(m["line_fields"], cats), graph)}
@@ -605,13 +688,33 @@ def predict_raw(tenant: str, key: str, payload: dict):
     return predict(tenant, key, {"records": records})
 
 
-@app.post("/api/{tenant}/models/{key}/retrain/preview")
-async def retrain_preview(tenant: str, key: str, file: UploadFile = File(...)):
+def _preview_page(items: Sequence, page: int, page_size: int) -> tuple[list, dict]:
+    """Return one 1-based page plus metadata shared by both preview collections."""
+    total_items = len(items)
+    total_pages = math.ceil(total_items / page_size) if total_items else 0
+    start = (page - 1) * page_size
+    return list(items[start:start + page_size]), {
+        "page": page,
+        "page_size": page_size,
+        "total_items": total_items,
+        "total_pages": total_pages,
+        "has_previous": page > 1 and total_items > 0,
+        "has_next": page < total_pages,
+    }
+
+
+def _retrain_preview_response(
+    *,
+    key: str,
+    upload_id: str,
+    filename: str,
+    df: pd.DataFrame,
+    columns_page: int,
+    sample_page: int,
+    sample_page_size: int,
+) -> dict:
+    """Build the validation result with independently paginated columns and rows."""
     m = _model_or_404(key)
-    upload_id = uuid.uuid4().hex[:12]
-    path = _UPLOADS / f"{upload_id}.csv"
-    path.write_bytes(await file.read())
-    df = pd.read_csv(path)
     missing = [c for c in m["required"] if c not in df.columns]
     # Optional columns never block an upload: raw_ingest synthesizes a neutral
     # value for each (no revision chain, negotiated price falls back to the quoted
@@ -625,19 +728,105 @@ async def retrain_preview(tenant: str, key: str, file: UploadFile = File(...)):
         f"Dataset is valid. {len(opt_missing)} optional column(s) absent — these are "
         f"filled in automatically, but supplying them trains a better model: "
         f"{', '.join(opt_missing)}.")
+    columns, columns_pagination = _preview_page(
+        list(df.columns), columns_page, _COLUMN_PREVIEW_PAGE_SIZE,
+    )
+    # Convert through pandas' JSON encoder so NaN becomes JSON null. Slicing before
+    # conversion also avoids serialising the complete uploaded dataset for every page.
+    sample_start = (sample_page - 1) * sample_page_size
+    sample = json.loads(
+        df.iloc[sample_start:sample_start + sample_page_size].to_json(orient="records")
+    )
+    _, sample_pagination = _preview_page(range(len(df)), sample_page, sample_page_size)
+
     return {
-        "upload_id": upload_id, "filename": file.filename,
-        "rows": int(len(df)), "columns": list(df.columns),
+        "upload_id": upload_id, "filename": filename,
+        "rows": int(len(df)), "columns": columns,
         "required_columns": m["required"], "missing_columns": missing,
         "optional_columns": optional, "optional_present": opt_present,
         "optional_missing": opt_missing,
         "valid": not missing,
         "message": msg,
-        # to_json (not to_dict) so NaN -> null; raw exports have plenty of NaN
-        # (parentQuotationID, negotiatedSalesPrice, ...) that to_dict leaves as
-        # float('nan'), which isn't valid JSON and 500s the response.
-        "sample": json.loads(df.head(5).to_json(orient="records")),
+        "sample": sample,
+        "pagination": {
+            "columns": columns_pagination,
+            "sample": {
+                **sample_pagination,
+                "allowed_page_sizes": list(_SAMPLE_PREVIEW_PAGE_SIZES),
+            },
+        },
     }
+
+
+def _load_preview_upload(upload_id: str) -> tuple[Path, str, int | None]:
+    """Resolve a previously uploaded preview without allowing path traversal."""
+    if len(upload_id) != 12 or any(c not in "0123456789abcdef" for c in upload_id):
+        raise HTTPException(404, "upload not found — re-run preview")
+    path = _UPLOADS / f"{upload_id}.csv"
+    if not path.exists():
+        raise HTTPException(404, "upload not found — re-run preview")
+    metadata_path = _UPLOADS / f"{upload_id}.json"
+    try:
+        metadata = json.loads(metadata_path.read_text())
+        filename = str(metadata.get("filename") or path.name)
+        rows = int(metadata["rows"]) if metadata.get("rows") is not None else None
+    except (OSError, ValueError, TypeError):
+        filename = path.name
+        rows = None
+    return path, filename, rows
+
+
+@app.post("/api/{tenant}/models/{key}/retrain/preview")
+async def retrain_preview(
+    tenant: str,
+    key: str,
+    file: UploadFile = File(...),
+    columns_page: int = Query(1, ge=1),
+    sample_page: int = Query(1, ge=1),
+    sample_page_size: Literal[5, 10, 50, 100] = Query(5),
+):
+    _model_or_404(key)
+    upload_id = uuid.uuid4().hex[:12]
+    path = _UPLOADS / f"{upload_id}.csv"
+    path.write_bytes(await file.read())
+    filename = file.filename or path.name
+    df = pd.read_csv(path)
+    (_UPLOADS / f"{upload_id}.json").write_text(json.dumps({
+        "filename": filename,
+        "rows": int(len(df)),
+    }))
+    return _retrain_preview_response(
+        key=key,
+        upload_id=upload_id,
+        filename=filename,
+        df=df,
+        columns_page=columns_page,
+        sample_page=sample_page,
+        sample_page_size=sample_page_size,
+    )
+
+
+@app.get("/api/{tenant}/models/{key}/retrain/preview/{upload_id}")
+def retrain_preview_page(
+    tenant: str,
+    key: str,
+    upload_id: str,
+    columns_page: int = Query(1, ge=1),
+    sample_page: int = Query(1, ge=1),
+    sample_page_size: Literal[5, 10, 50, 100] = Query(5),
+):
+    """Read another preview page without uploading the same dataset again."""
+    _model_or_404(key)
+    path, filename, _ = _load_preview_upload(upload_id)
+    return _retrain_preview_response(
+        key=key,
+        upload_id=upload_id,
+        filename=filename,
+        df=pd.read_csv(path),
+        columns_page=columns_page,
+        sample_page=sample_page,
+        sample_page_size=sample_page_size,
+    )
 
 
 @app.get("/api/{tenant}/models/{key}/retrain/db-columns")
@@ -763,16 +952,21 @@ def train(tenant: str, key: str, payload: dict):
         # learns from. For the shared base model those differ; see _data_tenant.
         dt = _data_tenant(tenant)
         run_id = get_training_backend().start(tenant, key, source="db", csv_path=None,
-                                              auto_hpo=auto_hpo, data_tenant=dt)
+                                              auto_hpo=auto_hpo, data_tenant=dt,
+                                              source_name="MaXXflow Database",
+                                              dataset_row_count=None)
         return {"run_id": run_id, "source": "db", "data_tenant": dt}
     upload_id = payload.get("upload_id")     # Upload-a-File path
     if not upload_id:
         raise HTTPException(400, "provide upload_id (from /retrain/preview) or source='db'")
-    path = _UPLOADS / f"{upload_id}.csv"
-    if not path.exists():
-        raise HTTPException(404, "upload not found — re-run preview")
+    path, filename, row_count = _load_preview_upload(str(upload_id))
+    # Compatibility for previews created before row counts were added to their
+    # sidecar. New uploads do not need this second read.
+    if row_count is None:
+        row_count = int(len(pd.read_csv(path)))
     run_id = get_training_backend().start(tenant, key, source="csv", csv_path=str(path),
-                                          auto_hpo=auto_hpo)
+                                          auto_hpo=auto_hpo, source_name=filename,
+                                          dataset_row_count=row_count)
     return {"run_id": run_id, "source": "csv"}
 
 
@@ -798,12 +992,27 @@ def publish(tenant: str, key: str, payload: dict):
     metrics = payload.get("metrics")
     if not version or not metrics:
         raise HTTPException(400, "provide version + metrics from the training result")
-    # `force` overrides the champion/challenger COMPARISON gate — an explicit human
-    # decision to ship a candidate that is not measurably better. It does not
-    # override the data-validation stop, and the forced decision is still recorded
-    # in `reasons` so the audit trail says it was overridden and by which check.
-    force = bool(payload.get("force", False))
-    return m["trainer"].publish(tenant, str(version), metrics, force=force)
+    # `force` is an explicit human decision to ship despite failed performance
+    # checks (absolute floor or champion comparison). It never overrides invalid
+    # input data, and every failed check remains in the returned audit trail.
+    force = payload.get("force", False)
+    if not isinstance(force, bool):
+        raise HTTPException(400, "force must be a JSON boolean")
+    result = m["trainer"].publish(tenant, str(version), metrics, force=force)
+    result["force_requested"] = force
+    result["forced"] = bool(
+        force and result.get("published")
+        and any(not check.get("passed", False) for check in result.get("gate_checks", []))
+    )
+    if result.get("published"):
+        published_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        MLflowRegistry().set_version_tags(
+            name=registered_model_name(tenant, key),
+            version=str(version),
+            tags={"published_at": published_at},
+        )
+        result["published_at"] = published_at
+    return result
 
 
 @app.get("/api/{tenant}/inventory-dashboard")

@@ -938,6 +938,7 @@ class LineWinModel(PythonModel):
 def train(df_or_path, tenant: str, *, auto_hpo: bool = True, register: bool = True,
           source: str = "csv", logger: RunLogger | None = None) -> dict:
     logger = logger or RunLogger()
+    logger.set_progress(10, "loading_data", "Loading training data")
     df = pd.read_csv(df_or_path) if isinstance(df_or_path, str) else df_or_path.copy()
     df = df.reset_index(drop=True)
 
@@ -995,6 +996,7 @@ def train(df_or_path, tenant: str, *, auto_hpo: bool = True, register: bool = Tr
     df, dq = clean_frame(df, num, cat, logger, dedupe_subset=dedupe_key,
                          winsorize=[c for c in num if c != PRICE_FEATURE])
     logger.log(f"Review & Clean: {dq.summary()}")
+    logger.set_progress(20, "cleaning_data", "Review and clean complete")
 
     y = pd.to_numeric(df[LABEL], errors="coerce").fillna(0).astype(int)
     if y.nunique() < 2:
@@ -1040,8 +1042,11 @@ def train(df_or_path, tenant: str, *, auto_hpo: bool = True, register: bool = Tr
     logger.log(f"Folds: {len(Xtr)} fit / {len(Xca)} calibrate / {len(Xte)} score. Calibration is "
                f"fitted on its OWN fold so Brier/ECE — the metrics the promotion gate reads — "
                f"are measured on data the calibrator never saw.")
+    logger.set_progress(25, "splitting_data", "Training folds prepared")
 
     params = auto_tune_classifier(Xtr, ytr, FINALIZED, logger) if auto_hpo else dict(FINALIZED)
+    if not auto_hpo:
+        logger.set_progress(55, "hyperparameter_search", "Using configured parameters")
     mono = _monotone_constraints(features)
     fit_params = {**params, "monotone_constraints": mono}
     if PRICE_FEATURE in features:
@@ -1053,6 +1058,7 @@ def train(df_or_path, tenant: str, *, auto_hpo: bool = True, register: bool = Tr
     # EARLY_STOP_MIN_ROWS the AUC eval metric is too noisy to trust (see module
     # constants), so fall back to the fixed, tuned n_estimators exactly as before.
     use_early_stop = len(Xca) >= EARLY_STOP_MIN_ROWS and yca.nunique() >= 2
+    logger.set_progress(60, "fitting_model", "Fitting the primary model")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         if use_early_stop:
@@ -1072,6 +1078,7 @@ def train(df_or_path, tenant: str, *, auto_hpo: bool = True, register: bool = Tr
             booster = LGBMClassifier(verbose=-1, random_state=7, **fit_params).fit(Xtr, ytr)
             logger.log("Early stopping skipped — calibration fold too small or single-class for "
                        "a validation signal; using the tuned n_estimators fixed.")
+    logger.set_progress(65, "calibrating_model", "Calibrating model probabilities")
 
     raw_ca = booster.predict_proba(Xca)[:, 1]
     if len(Xca) >= MIN_FOLD_ROWS and yca.nunique() >= 2:
@@ -1098,6 +1105,14 @@ def train(df_or_path, tenant: str, *, auto_hpo: bool = True, register: bool = Tr
             idx = rng.randint(0, len(Xtr), len(Xtr))
             Xb, yb = Xtr.iloc[idx], ytr.iloc[idx]
             if yb.nunique() < 2:
+                logger.set_progress(
+                    65 + (i + 1) * 20 / N_BOOTSTRAP,
+                    "bootstrap_ensemble",
+                    f"Bootstrap model {i + 1} of {N_BOOTSTRAP}",
+                    current=i + 1,
+                    total=N_BOOTSTRAP,
+                    message=f"Bootstrap model {i + 1}/{N_BOOTSTRAP} skipped (single class)",
+                )
                 continue
             bst_i = LGBMClassifier(verbose=-1, random_state=7 + i + 1, **fit_params).fit(Xb, yb)
             r_i = bst_i.predict_proba(Xca)[:, 1]
@@ -1105,6 +1120,14 @@ def train(df_or_path, tenant: str, *, auto_hpo: bool = True, register: bool = Tr
                                         y_max=PROB_CEIL).fit(r_i, yca)
                      if yca.nunique() >= 2 else _IdentityCalibrator())
             bootstrap_models.append((bst_i, cal_i))
+            logger.set_progress(
+                65 + (i + 1) * 20 / N_BOOTSTRAP,
+                "bootstrap_ensemble",
+                f"Bootstrap model {i + 1} of {N_BOOTSTRAP}",
+                current=i + 1,
+                total=N_BOOTSTRAP,
+                message=f"Bootstrap model {i + 1}/{N_BOOTSTRAP} fitted",
+            )
     logger.log(f"Fit {len(bootstrap_models)}/{N_BOOTSTRAP} bootstrap models; displayed interval is "
                f"the union of that spread and the Wilson interval on the calibration fold's "
                f"realised win rate.")
@@ -1143,6 +1166,7 @@ def train(df_or_path, tenant: str, *, auto_hpo: bool = True, register: bool = Tr
     logger.log(f"Metrics ({strategy} holdout): accuracy={metrics['accuracy']:.3f} "
                f"(majority-class baseline {base_rate:.3f}) AUC={metrics['auc']:.3f} "
                f"F1={metrics['f1']:.3f} Brier={metrics['brier']:.3f} ECE={metrics['ece']:.3f}")
+    logger.set_progress(90, "evaluating_model", "Evaluation complete")
 
     categories = {c: list(X[c].cat.categories) for c in cat}
     model = LineWinModel(booster, iso, categories, features, product_support, group_col,
@@ -1182,9 +1206,11 @@ def train(df_or_path, tenant: str, *, auto_hpo: bool = True, register: bool = Tr
                                "outliers_clipped": dq.outliers_clipped},
               "brd_elements_present": have, "brd_elements_missing": missing}
     if not register:
+        logger.set_progress(100, "complete", "Training complete")
         result["_model"] = model
         return result
 
+    logger.set_progress(95, "registering_candidate", "Registering candidate model")
     reg = MLflowRegistry()
     name = registered_model_name(tenant, MODULE)
     tags = {"tenant": tenant, "module": MODULE, "data_provenance": source,
@@ -1213,6 +1239,7 @@ def train(df_or_path, tenant: str, *, auto_hpo: bool = True, register: bool = Tr
     version = reg.log_and_register(model, name=name, params={"algo": "lightgbm+isotonic", **params},
                                    metrics=metrics, tags=tags, signature=sig, input_example=ex)
     logger.log(f"Registered {name} v{version} (candidate — not yet champion)")
+    logger.set_progress(98, "candidate_registered", f"Candidate v{version} registered")
     result.update({"registered_name": name, "version": version, "champion": _champion_metrics(reg, name)})
     return result
 

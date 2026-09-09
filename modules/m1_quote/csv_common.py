@@ -22,6 +22,13 @@ from maxxflow_features.cleaning import clean_frame as _shared_clean_frame
 class RunLogger:
     """Collects real, timestamped training log lines (the Train page tails these)."""
     lines: list = field(default_factory=list)
+    progress_state: dict = field(default_factory=lambda: {
+        "percent": 0,
+        "phase": "queued",
+        "label": "Waiting to start",
+        "current": None,
+        "total": None,
+    })
 
     def log(self, msg: str) -> str:
         line = f"[{time.strftime('%H:%M:%S')}] {msg}"
@@ -30,6 +37,24 @@ class RunLogger:
 
     def info(self, msg: str) -> str:
         return self.log(msg)
+
+    def set_progress(self, percent: int | float, phase: str, label: str, *,
+                     current: int | None = None, total: int | None = None,
+                     message: str | None = None) -> dict:
+        """Publish machine-readable progress, optionally alongside a human log line."""
+        self.progress_state = {
+            "percent": max(0, min(100, int(round(percent)))),
+            "phase": phase,
+            "label": label,
+            "current": current,
+            "total": total,
+        }
+        if message:
+            self.log(message)
+        return dict(self.progress_state)
+
+    def progress_snapshot(self) -> dict:
+        return dict(self.progress_state)
 
 
 def require_columns(df: pd.DataFrame, needed: list[str]) -> list[str]:
@@ -71,7 +96,15 @@ def auto_tune_classifier(X: pd.DataFrame, y: pd.Series, finalized: dict,
         candidates.append((f"search-{i+1}",
                            {k: rng.choice(v) for k, v in _SEARCH_SPACE.items()}))
     best = None
-    for name, params in candidates:
+    total = len(candidates)
+    for index, (name, params) in enumerate(candidates, start=1):
+        logger.set_progress(
+            25 + (index - 1) * 30 / total,
+            "hyperparameter_search",
+            f"HPO trial {index} of {total}",
+            current=index,
+            total=total,
+        )
         try:
             est = LGBMClassifier(verbose=-1, random_state=7, **params)
             score = float(cross_val_score(est, X, y, cv=cv, scoring="roc_auc").mean())
@@ -83,6 +116,8 @@ def auto_tune_classifier(X: pd.DataFrame, y: pd.Series, finalized: dict,
                    f"leaves={params['num_leaves']}, mcs={params['min_child_samples']})")
         if best is None or score > best[0]:
             best = (score, name, params)
+    logger.set_progress(55, "hyperparameter_search", f"HPO {total} of {total}",
+                        current=total, total=total)
     chosen = best[2] if best else dict(finalized)
     logger.log(f"HPO best: {best[1] if best else 'finalized'} @ CV AUC={best[0]:.4f}"
                if best else "HPO: fell back to finalized params")

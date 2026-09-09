@@ -188,6 +188,15 @@ class MLflowRegistry:
         mv = self.client.get_model_version(name=name, version=str(version))
         return dict(mv.tags or {})
 
+    def set_version_tags(self, *, name: str, version: str,
+                         tags: Mapping[str, Any]) -> None:
+        """Attach durable card/audit metadata to one exact registered version."""
+        for key, value in tags.items():
+            if value is not None:
+                self.client.set_model_version_tag(
+                    name=name, version=str(version), key=key, value=str(value)
+                )
+
     # --- read path (load by name@alias ONLY) ---------------------------------
     def load_champion(self, *, name: str, alias: str | None = None) -> Any:
         alias = alias or get_settings().model_alias

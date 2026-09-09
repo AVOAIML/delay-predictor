@@ -75,6 +75,27 @@ _UNSERIALISABLE_RESULT_KEYS = ("_model", "logs")
 RESULT_ARTIFACT = "configurator_result.json"
 
 
+def _tag_card_metadata(result: dict, *, model_key: str, source: str,
+                       source_name: str, dataset_row_count: int,
+                       published_at: str | None = None) -> None:
+    """Persist model-card fields on the exact candidate/champion version."""
+    from maxxflow_mlops.registry import MLflowRegistry
+
+    MLflowRegistry().set_version_tags(
+        name=result["registered_name"],
+        version=str(result["version"]),
+        tags={
+            "data_source_kind": "database" if source == "db" else "csv",
+            "data_source_name": source_name,
+            "dataset_row_count": int(dataset_row_count),
+            "algorithm": result.get("selected_model") or (
+                "lightgbm-isotonic" if model_key == "m1_quote_line_win" else None
+            ),
+            "published_at": published_at,
+        },
+    )
+
+
 def _publish_result_artifact(tenant: str, model_key: str, result: dict) -> None:
     """Attach the trainer's own result dict to its MLflow run as JSON.
 
@@ -177,6 +198,8 @@ def cmd_train_csv(args):
     print(f"reading {args.csv}" + (" (remote)" if remote else " (local)"), file=sys.stderr)
     raw = pd.read_csv(args.csv, storage_options=opts)
     print(f"{len(raw)} raw rows", file=sys.stderr)
+    source_name = os.environ.get("MAXXFLOW_DATA_SOURCE_NAME") or args.csv.rsplit("/", 1)[-1]
+    dataset_row_count = int(os.environ.get("MAXXFLOW_DATASET_ROW_COUNT") or len(raw))
 
     if args.model == "m2_inventory":
         from m2_inventory.csv_training import train_for_configurator
@@ -185,6 +208,10 @@ def cmd_train_csv(args):
             result = train_for_configurator(
                 raw, args.tenant, register=True, source="csv", logger=logger
             )
+        _tag_card_metadata(
+            result, model_key=args.model, source="csv", source_name=source_name,
+            dataset_row_count=dataset_row_count,
+        )
         _publish_result_artifact(args.tenant, args.model, result)
         out = {"model": args.model, "tenant": args.tenant,
                "version": result["version"], "metrics": result["metrics"],
@@ -198,8 +225,17 @@ def cmd_train_csv(args):
             out["published"] = decision["published"]
             out["blocker"] = decision.get("blocker")
             out["gate_checks"] = decision.get("gate_checks")
+            if out["published"]:
+                from datetime import datetime, timezone
+                published_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                _tag_card_metadata(
+                    result, model_key=args.model, source="csv", source_name=source_name,
+                    dataset_row_count=dataset_row_count, published_at=published_at,
+                )
+                out["published_at"] = published_at
         print(_json.dumps(out, indent=2, default=str))
         if publisher is not None:
+            logger.set_progress(100, "complete", "Training complete")
             message = ("FINISHED" if not args.publish or out["published"]
                        else f"NOT PUBLISHED - {out.get('blocker')}")
             publisher.append(message)
@@ -221,7 +257,8 @@ def cmd_train_csv(args):
     # because the Configurator reads a run back through the registry without
     # knowing which command produced it.
     _train_and_report(args, frame=frame, tenant=args.tenant, source="csv", logger=logger,
-                      publisher=publisher)
+                      publisher=publisher, source_name=source_name,
+                      dataset_row_count=dataset_row_count)
 
 
 def _redirect_registry(mlflow_uri: str) -> None:
@@ -290,10 +327,19 @@ def _progress_logger(progress_id: str):
             publisher.append(line)
             return line
 
+        def set_progress(self, percent, phase, label, *, current=None, total=None,
+                         message=None):
+            snapshot = super().set_progress(
+                percent, phase, label, current=current, total=total, message=message
+            )
+            publisher.update_progress(snapshot)
+            return snapshot
+
     return _MirroredRunLogger(), publisher
 
 
-def _train_and_report(args, *, frame, tenant: str, source: str, logger, publisher=None) -> None:
+def _train_and_report(args, *, frame, tenant: str, source: str, logger, publisher=None,
+                      source_name: str, dataset_row_count: int) -> None:
     """Shared tail of train-csv and train-db: fit, register, attach the result
     artifact, optionally publish, emit the result JSON, and set the exit code.
 
@@ -317,6 +363,10 @@ def _train_and_report(args, *, frame, tenant: str, source: str, logger, publishe
         for line in logger.lines:
             print(line)
 
+    _tag_card_metadata(
+        result, model_key=args.model, source=source, source_name=source_name,
+        dataset_row_count=dataset_row_count,
+    )
     _publish_result_artifact(tenant, args.model, result)
 
     out = {"model": args.model, "tenant": tenant, "version": result["version"],
@@ -328,16 +378,26 @@ def _train_and_report(args, *, frame, tenant: str, source: str, logger, publishe
         out["published"] = decision["published"]
         out["blocker"] = decision.get("blocker")
         out["gate_checks"] = decision.get("gate_checks")
+        if out["published"]:
+            from datetime import datetime, timezone
+            published_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            _tag_card_metadata(
+                result, model_key=args.model, source=source, source_name=source_name,
+                dataset_row_count=dataset_row_count, published_at=published_at,
+            )
+            out["published_at"] = published_at
     print(_json.dumps(out, indent=2, default=str))
     if args.publish and not out["published"]:
         # Exit 3, not 1: the model trained and the gate refused it. The feed is
         # closed FINISHED for the same reason — the run did what it was asked to.
         if publisher is not None:
+            logger.set_progress(100, "complete", "Training complete")
             publisher.append(f"NOT PUBLISHED - {out['blocker']}")
             publisher.close("FINISHED")
         print(f"NOT PUBLISHED - {out['blocker']}", file=sys.stderr)
         sys.exit(3)
     if publisher is not None:
+        logger.set_progress(100, "complete", "Training complete")
         publisher.close("FINISHED")
 
 
@@ -430,8 +490,12 @@ def cmd_train_db(args):
             publisher.close("FAILED")
         sys.exit(1)
 
-    _train_and_report(args, frame=frame, tenant=args.tenant, source="db", logger=logger,
-                      publisher=publisher)
+    _train_and_report(
+        args, frame=frame, tenant=args.tenant, source="db", logger=logger,
+        publisher=publisher,
+        source_name=os.environ.get("MAXXFLOW_DATA_SOURCE_NAME") or "MaXXflow Database",
+        dataset_row_count=len(frame),
+    )
 
 
 def cmd_score(args):

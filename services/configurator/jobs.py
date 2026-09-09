@@ -31,6 +31,7 @@ from m1_quote.csv_common import RunLogger
 # for callers that still reach for jobs.build_training_frame.
 from m1_quote.frames import build_training_frame, write_option_graph  # noqa: F401
 from m2_inventory.csv_training import train_for_configurator as train_inventory_csv
+from maxxflow_mlops.registry import MLflowRegistry
 
 _INVENTORY_ARTIFACTS = Path(__file__).resolve().parents[2] / "artifacts" / "m2_inventory"
 
@@ -65,7 +66,9 @@ def build_db_frame(tenant: str, model_key: str):
 
 
 def start(tenant: str, model_key: str, *, source: str = "csv", csv_path: str | None = None,
-          auto_hpo: bool = True, data_tenant: str | None = None) -> str:
+          auto_hpo: bool = True, data_tenant: str | None = None,
+          source_name: str | None = None,
+          dataset_row_count: int | None = None) -> str:
     """`tenant` owns the model (it becomes the registered name). `data_tenant` is
     whose schema the DB path reads. They are the same for a tenant-owned model and
     differ for the shared base model, which is owned by `global` and has no schema
@@ -75,14 +78,21 @@ def start(tenant: str, model_key: str, *, source: str = "csv", csv_path: str | N
     run_id = uuid.uuid4().hex[:12]
     read_from = data_tenant or tenant
     logger = RunLogger()
+    logger.set_progress(0, "queued", "Waiting to start")
+    resolved_source_name = source_name or (
+        "MaXXflow Database" if source == "db" else str(csv_path).rsplit("/", 1)[-1]
+    )
     job = {"run_id": run_id, "tenant": tenant, "model_key": model_key, "source": source,
            "data_tenant": read_from,
+           "source_name": resolved_source_name, "dataset_row_count": dataset_row_count,
            "status": "running", "logger": logger, "result": None, "error": None,
-           "started_at": time.time()}
+           "started_at": time.time(), "finished_at": None}
     _JOBS[run_id] = job
 
     def _run():
         try:
+            logger.set_progress(5, "preparing_data", "Preparing training data",
+                                message="Training worker started")
             if model_key == "m2_inventory":
                 if source != "csv":
                     raise ValueError("m2_inventory currently retrains from CSV only")
@@ -99,6 +109,7 @@ def start(tenant: str, model_key: str, *, source: str = "csv", csv_path: str | N
                          f"owned by '{tenant}')") if read_from != tenant else f"schema tenant_{read_from}"
                 logger.log(f"Connecting to the read replica and building features from {where}…")
                 frame = _DB_BUILDERS[model_key](read_from)
+                job["dataset_row_count"] = int(len(frame))
                 job["result"] = trainer(frame, tenant, **kwargs)
             else:
                 trainer = _TRAINERS[model_key]
@@ -109,12 +120,30 @@ def start(tenant: str, model_key: str, *, source: str = "csv", csv_path: str | N
                 write_option_graph(raw, logger)
                 frame = build_training_frame(model_key, raw, tenant, logger)
                 job["result"] = trainer(frame, tenant, **kwargs)
+            result = job["result"]
+            MLflowRegistry().set_version_tags(
+                name=result["registered_name"],
+                version=str(result["version"]),
+                tags={
+                    "data_source_kind": "database" if source == "db" else "csv",
+                    "data_source_name": job["source_name"],
+                    "dataset_row_count": job["dataset_row_count"],
+                    "algorithm": result.get("selected_model") or (
+                        "lightgbm-isotonic" if model_key == "m1_quote_line_win" else None
+                    ),
+                },
+            )
             job["status"] = "done"
+            job["finished_at"] = time.time()
             logger.log("Training complete — candidate registered. Review results, then Publish.")
+            logger.set_progress(100, "complete", "Training complete")
         except Exception as e:
             job["error"] = f"{type(e).__name__}: {e}"
             job["status"] = "error"
+            job["finished_at"] = time.time()
             logger.log(f"ERROR: {job['error']}")
+            current = logger.progress_snapshot()
+            logger.set_progress(current["percent"], "error", "Training failed")
 
     threading.Thread(target=_run, daemon=True).start()
     return run_id
@@ -124,12 +153,28 @@ def status(run_id: str) -> dict:
     job = _JOBS.get(run_id)
     if job is None:
         return {"status": "unknown"}
+    elapsed_until = job.get("finished_at") or time.time()
     out = {"run_id": run_id, "tenant": job["tenant"], "model_key": job["model_key"],
            "source": job["source"], "status": job["status"], "logs": list(job["logger"].lines),
-           "elapsed_s": round(time.time() - job["started_at"], 1)}
+           "data_source": {
+               "kind": "database" if job["source"] == "db" else "csv",
+               "name": job["source_name"],
+               "row_count": job["dataset_row_count"],
+           },
+           "elapsed_s": round(elapsed_until - job["started_at"], 1),
+           "started_at": job["started_at"],
+           "progress": job["logger"].progress_snapshot()}
     if job["status"] == "done":
         r = dict(job["result"]); r.pop("_model", None); r.pop("logs", None)
         out["result"] = r
     if job["status"] == "error":
         out["error"] = job["error"]
     return out
+
+
+def active_runs(tenant: str) -> list[dict]:
+    """Current runs for a tenant, newest first, without exposing their full logs."""
+    active = [job for job in _JOBS.values()
+              if job["tenant"] == tenant and job["status"] == "running"]
+    active.sort(key=lambda job: job["started_at"], reverse=True)
+    return [status(job["run_id"]) for job in active]

@@ -49,7 +49,7 @@ _to_delete/
 _claude_gate_variant/
 _prisma/
 
-
+docs/ai-ml-features/ML_MODEL_CONFIGURATOR_BACKEND_CHANGES.md
 modules/m3_delay
 modules/m4_bom
 modules/m5_scheduling
