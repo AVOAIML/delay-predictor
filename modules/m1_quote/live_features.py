@@ -129,18 +129,9 @@ def line_win_features_from_raw(header: dict, lines: list[dict], rate_lookup: dic
             unit_price = float(ln["unitPrice"])
         except (KeyError, TypeError, ValueError):
             raise ValueError(f"line {i}: unitPrice is required and must be numeric")
-        # A blank or zero sale price used to sail through as effective=0, i.e.
-        # price_ratio 0 — "given away free" — which the win model reads as the
-        # cheapest price it has ever seen and scores accordingly. Fall back to
-        # unit cost instead of inventing a giveaway. The ratio is calculated
-        # against the supplied/derived list price below.
         effective = _first_positive(ln.get("negotiatedSalesPrice"), ln.get("salesPrice"))
         if effective is None:
             effective = unit_price
-        # MaXXflow's live quote payload does not always carry catalogue list price.
-        # Keep that implementation detail server-side: when absent/blank/non-positive,
-        # derive list = unit cost + 67% of unit cost. An explicitly supplied positive
-        # list price still wins for API clients that have one.
         list_price = _first_positive(ln.get("listPrice"))
         if list_price is None:
             list_price = unit_price + (DEFAULT_LIST_PRICE_MARKUP * unit_price)
