@@ -1044,8 +1044,17 @@ def train(df_or_path, tenant: str, *, auto_hpo: bool = True, register: bool = Tr
                f"are measured on data the calibrator never saw.")
     logger.set_progress(25, "splitting_data", "Training folds prepared")
 
-    params = auto_tune_classifier(Xtr, ytr, FINALIZED, logger) if auto_hpo else dict(FINALIZED)
+    model_selection = {}
+    params = (auto_tune_classifier(
+        Xtr, ytr, FINALIZED, logger, selection=model_selection
+    ) if auto_hpo else dict(FINALIZED))
     if not auto_hpo:
+        model_selection.update({
+            "candidate_count": 1,
+            "selected_candidate": "finalized",
+            "selection_metric": None,
+            "selection_score": None,
+        })
         logger.set_progress(55, "hyperparameter_search", "Using configured parameters")
     mono = _monotone_constraints(features)
     fit_params = {**params, "monotone_constraints": mono}
@@ -1192,6 +1201,12 @@ def train(df_or_path, tenant: str, *, auto_hpo: bool = True, register: bool = Tr
                f"({metrics['price_monotonicity_violated_full_range']:.1%} across the full sweep, "
                f"where crossing out of below-cost pricing may legitimately help)")
 
+    model_name = "Gradient Boosting"
+    candidate_count = model_selection["candidate_count"]
+    algorithm_description = (
+        f"Built with {model_name}, chosen from {candidate_count} candidate "
+        f"configuration{'s' if candidate_count != 1 else ''}"
+    )
     result = {"model_type": "classification", "metrics": metrics, "features": features,
               "dropped_features": dropped, "source": source,
               "confusion": {"tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp)},
@@ -1200,6 +1215,15 @@ def train(df_or_path, tenant: str, *, auto_hpo: bool = True, register: bool = Tr
               "price_ratio_bounds": price_bounds, "price_basis": price_basis,
               "price_informative_bounds": model.price_informative_bounds,
               "support_basis": support_basis,
+              # Ready-to-render provenance for the Results page. "Candidates" are
+              # hyperparameter configurations of the same LightGBM model family, not
+              # different algorithm families, so the response states that explicitly.
+              "model_selection": {
+                  "model_name": model_name,
+                  "implementation": "LightGBM + isotonic calibration",
+                  **model_selection,
+                  "description": algorithm_description,
+              },
               "data_quality": {"rows_in": dq.rows_in, "rows_out": dq.rows_out,
                                "duplicates_removed": dq.duplicates_removed,
                                "missing_filled": dq.missing_filled,

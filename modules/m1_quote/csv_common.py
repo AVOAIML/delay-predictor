@@ -86,7 +86,8 @@ _SEARCH_SPACE = {
 
 
 def auto_tune_classifier(X: pd.DataFrame, y: pd.Series, finalized: dict,
-                         logger: RunLogger, n_iter: int = 8, cv: int = 3) -> dict:
+                         logger: RunLogger, n_iter: int = 8, cv: int = 3,
+                         selection: dict | None = None) -> dict:
     """Small random search around the finalized params, scored by CV ROC-AUC.
     The finalized config is always a candidate; we keep it unless a search config
     genuinely beats it (so 'finalized' is the anchor, HPO only improves)."""
@@ -119,6 +120,13 @@ def auto_tune_classifier(X: pd.DataFrame, y: pd.Series, finalized: dict,
     logger.set_progress(55, "hyperparameter_search", f"HPO {total} of {total}",
                         current=total, total=total)
     chosen = best[2] if best else dict(finalized)
+    if selection is not None:
+        selection.update({
+            "candidate_count": total,
+            "selected_candidate": best[1] if best else "finalized",
+            "selection_metric": "cv_roc_auc",
+            "selection_score": best[0] if best else None,
+        })
     logger.log(f"HPO best: {best[1] if best else 'finalized'} @ CV AUC={best[0]:.4f}"
                if best else "HPO: fell back to finalized params")
     return chosen

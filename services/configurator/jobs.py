@@ -89,7 +89,7 @@ def start(tenant: str, model_key: str, *, source: str = "csv", csv_path: str | N
            "source_name": resolved_source_name, "dataset_row_count": dataset_row_count,
            "fallback_used": False, "fallback_reason": None,
            "status": "running", "logger": logger, "result": None, "error": None,
-           "started_at": time.time(), "finished_at": None}
+           "started_at": time.time(), "finished_at": None, "published": False}
     _JOBS[run_id] = job
 
     def _run():
@@ -199,3 +199,33 @@ def active_runs(tenant: str) -> list[dict]:
               if job["tenant"] == tenant and job["status"] == "running"]
     active.sort(key=lambda job: job["started_at"], reverse=True)
     return [status(job["run_id"]) for job in active]
+
+
+def pending_runs(tenant: str) -> list[dict]:
+    """Running and successfully completed, still-unpublished runs for a tenant.
+
+    Completed jobs stay in the in-process registry after the wizard unmounts. Exposing
+    them here lets the model catalogue distinguish "training finished" from "published"
+    and offer the user a route back to Review & Publish.
+    """
+    pending = [job for job in _JOBS.values()
+               if job["tenant"] == tenant
+               and job["status"] in ("running", "done")
+               and not job.get("published", False)]
+    pending.sort(key=lambda job: job["started_at"], reverse=True)
+    return [status(job["run_id"]) for job in pending]
+
+
+def mark_published(tenant: str, model_key: str, version: str) -> None:
+    """Remove the matching completed candidate from the pending catalogue state."""
+    matching_started_at = next((
+        job["started_at"] for job in _JOBS.values()
+        if job["tenant"] == tenant and job["model_key"] == model_key
+        and str((job.get("result") or {}).get("version")) == str(version)
+    ), None)
+    if matching_started_at is None:
+        return
+    for job in _JOBS.values():
+        if (job["tenant"] == tenant and job["model_key"] == model_key
+                and job["started_at"] <= matching_started_at):
+            job["published"] = True

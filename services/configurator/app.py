@@ -48,6 +48,7 @@ from m1_quote.raw_ingest import (
     RATE_LOOKUP_PATH,
     RAW_OPTIONAL_COLS,
     RAW_REQUIRED_COLS,
+    price_ratio_for,
 )
 from m2_inventory import csv_training as inventory_csv
 from m2_inventory.db_prediction import read_db_prediction_snapshots
@@ -95,6 +96,7 @@ _INVENTORY_ARTIFACTS = _REPO_ROOT / "artifacts" / "m2_inventory"
 def _num(n): return {"name": n, "type": "number"}
 def _cat(n): return {"name": n, "type": "category"}
 _PAYMENT_TERM_OPTIONS = ["Immediate Payment", "15 days", "21 days"]
+_LINE_WIN_PAYMENT_TERM_OPTIONS = ["15 Days", "21 Days", "Immediate", "Net 30"]
 
 MODELS = {
     "m1_quote_win": {
@@ -305,14 +307,14 @@ def health():
 def list_models(tenant: str):
     reg = MLflowRegistry()
     try:
-        active_by_model = {
+        pending_by_model = {
             run["model_key"]: run
-            for run in reversed(get_training_backend().active_runs(tenant))
+            for run in reversed(get_training_backend().pending_runs(tenant))
         }
     except Exception:
         # Model discovery must remain available if the training backend itself is
         # temporarily unreachable. The Train screen will surface its detailed error.
-        active_by_model = {}
+        pending_by_model = {}
     cards = []
     for key, m in MODELS.items():
         own = registered_model_name(tenant, key)
@@ -328,15 +330,24 @@ def list_models(tenant: str):
         card_metadata = (_champion_card_metadata(reg, serving_name) if resolved else {
             "algorithm": None, "data_source": None, "published_at": None,
         })
-        active = active_by_model.get(key)
-        training = None if active is None else {
-            "run_id": active["run_id"],
-            "status": active["status"],
-            "progress": active.get("progress"),
-            "elapsed_s": active.get("elapsed_s", 0),
-            "started_at": active.get("started_at"),
-            "data_source": active.get("data_source"),
+        pending = pending_by_model.get(key)
+        run_summary = None if pending is None else {
+            "run_id": pending["run_id"],
+            "status": pending["status"],
+            "progress": pending.get("progress"),
+            "elapsed_s": pending.get("elapsed_s", 0),
+            "started_at": pending.get("started_at"),
+            "data_source": pending.get("data_source"),
         }
+        if run_summary is not None and pending["status"] == "done":
+            run_summary.update({
+                "publication_status": "ready_to_publish",
+                "status_label": "Ready to Publish",
+                # Everything the Results page and subsequent /publish request need.
+                # Training backends already remove the in-memory model object and logs
+                # before exposing this result, so the catalogue stays JSON-safe.
+                "result": pending.get("result"),
+            })
         cards.append({
             "key": key, "title": m["title"], "model_type": m["model_type"],
             "description": m["description"], "predicts": m["predicts"],
@@ -344,7 +355,10 @@ def list_models(tenant: str):
             "registered_name": own,          # where THIS tenant's training registers
             "serving_name": serving_name,     # what currently answers predictions
             "base_model": is_base,            # True = served by the shared global base
-            "training": training,              # active challenger, independent of champion
+            "training": run_summary if pending and pending["status"] == "running" else None,
+            # A registered candidate is not live until Publish moves the @champion alias.
+            # Keep this server-derived so leaving the wizard does not erase the state.
+            "pending_candidate": run_summary if pending and pending["status"] == "done" else None,
             **card_metadata,
         })
     return {"tenant": tenant, "models": cards}
@@ -428,7 +442,7 @@ def _region_options(tenant: str) -> list[str]:
             "SELECT DISTINCT state FROM contacts "
             "WHERE state IS NOT NULL AND state <> '' AND deleted_at IS NULL "
             "ORDER BY state",
-            tenant=tenant,
+            tenant=_data_tenant(tenant),
         )
         return [str(v) for v in df["state"].tolist()]
     except Exception:
@@ -451,9 +465,58 @@ def _apply_region_options(fields: list[dict], tenant: str) -> list[dict]:
     return out
 
 
+def _product_catalog(tenant: str) -> dict[str, dict]:
+    """Live tenant products keyed by SKU for Test Predictions.
+
+    The UI-facing identifier is the stable, recognisable SKU. The database UUID is
+    retained privately so a DB-trained champion whose productID vocabulary contains UUIDs
+    can still receive the representation on which it was trained.
+    """
+    try:
+        from maxxflow_data.engine import get_data_access
+
+        da = get_data_access()
+        if not da.settings.db_enabled:
+            return {}
+        df = da.query(
+            "SELECT id, sku, unit_cost, sales_price FROM products "
+            "WHERE deleted_at IS NULL ORDER BY sku",
+            tenant=_data_tenant(tenant),
+        )
+        catalog = {}
+        for row in df.to_dict(orient="records"):
+            sku = str(row.get("sku") or "").strip()
+            if sku:
+                catalog[sku] = row
+        return catalog
+    except Exception:
+        # Schema discovery must remain usable when the tenant DB is temporarily down.
+        return {}
+
+
+def _line_win_predict_fields(tenant: str) -> list[dict]:
+    """The intentionally small, client-facing flat Test Predictions contract."""
+    products = list(_product_catalog(tenant))
+    fields = [
+        _num("quantity"),
+        _num("unitPrice"),
+        _num("leadTimeDays"),
+        _num("salesPrice"),
+        {**_num("quote_total"), "read_only": True,
+         "formula": "quantity * salesPrice"},
+        _num("list_price"),
+        {**_cat("productID"), "options": products},
+        _cat("region"),
+        {**_cat("payment_terms"), "options": _LINE_WIN_PAYMENT_TERM_OPTIONS},
+    ]
+    return _apply_region_options(fields, tenant)
+
+
 @app.get("/api/{tenant}/models/{key}/predict-schema")
 def predict_schema(tenant: str, key: str):
     m = _model_or_404(key)
+    if key == "m1_quote_line_win":
+        return {"model": key, "fields": _line_win_predict_fields(tenant)}
     fields = _enrich_options(m["fields"], _champion_categories(tenant, key))
     fields = _apply_region_options(fields, tenant)
     return {"model": key, "fields": fields}
@@ -493,6 +556,71 @@ def _load_champion(reg: MLflowRegistry, tenant: str, key: str):
     return serving_name, is_base, reg.load_champion(name=serving_name)
 
 
+def _line_win_prediction_records(tenant: str, records: list[dict], model) -> list[dict]:
+    """Expand the small public line-win form into the champion's engineered contract."""
+    catalog = _product_catalog(tenant)
+    try:
+        categories = getattr(model.unwrap_python_model(), "categories", {}) or {}
+    except Exception:
+        categories = {}
+    trained_products = {str(value) for value in categories.get("productID", [])}
+    prepared = []
+    for index, original in enumerate(records):
+        record = dict(original)
+        product_sku = str(record.get("productID") or "").strip()
+        product = catalog.get(product_sku, {})
+
+        # Accept the established camelCase name and the lowercase spelling used by
+        # older/manual API callers.
+        sales_price = record.get("salesPrice", record.get("salesprice"))
+        unit_price = record.get("unitPrice", product.get("unit_cost"))
+        if sales_price in (None, ""):
+            sales_price = product.get("sales_price")
+        list_price = record.get("list_price", record.get("listPrice"))
+        if list_price in (None, ""):
+            list_price = product.get("sales_price")
+        try:
+            quantity = float(record.get("quantity"))
+            sales_price = float(sales_price)
+            unit_price = float(unit_price)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                400,
+                f"record {index}: quantity, unitPrice and salesPrice must be numeric",
+            )
+        try:
+            resolved_list_price = float(list_price)
+        except (TypeError, ValueError):
+            resolved_list_price = unit_price
+
+        # DB training learns the product UUID; CSV training commonly learns the SKU.
+        # Send whichever form exists in the active champion's vocabulary.
+        db_product_id = str(product.get("id") or "")
+        if product_sku not in trained_products and db_product_id in trained_products:
+            record["productID"] = db_product_id
+        else:
+            record["productID"] = product_sku
+
+        ratio, _ = price_ratio_for(sales_price, resolved_list_price, unit_price)
+        record.update({
+            "quantity": quantity,
+            "unitPrice": unit_price,
+            "salesPrice": sales_price,
+            "list_price": resolved_list_price,
+            "price_ratio": ratio,
+            "quote_total": quantity * sales_price,
+            # These engineered fields are deliberately hidden from the public schema.
+            # Neutral values satisfy older required MLflow signatures; the served model
+            # handles unknown categories and applies its own learned numeric fills.
+            "contact_win_rate": 0.5,
+            "salesrep_win_rate": 0.5,
+            "industry": "",
+            "product_type": "",
+        })
+        prepared.append(record)
+    return prepared
+
+
 @app.post("/api/{tenant}/models/{key}/predict")
 def predict(tenant: str, key: str, payload: dict):
     m = _model_or_404(key)
@@ -504,11 +632,17 @@ def predict(tenant: str, key: str, payload: dict):
         raise HTTPException(409, "no published (champion) model yet, and no global base model "
                                  "to fall back to — train and publish first")
     serving_name, is_base, model = loaded
+    if key == "m1_quote_line_win":
+        records = _line_win_prediction_records(tenant, records, model)
     df = _coerce(pd.DataFrame(records), m["fields"])
 
     preds = model.predict(df)
 
-    return {"predictions": preds.to_dict(orient="records"),
+    # pandas' JSON encoder converts guardrail NaN values to JSON null. Returning
+    # to_dict() directly makes Starlette reject an otherwise valid prediction with
+    # "Out of range float values are not JSON compliant".
+    predictions = json.loads(preds.to_json(orient="records"))
+    return {"predictions": predictions,
             "serving_name": serving_name, "base_model": is_base}
 
 
@@ -540,6 +674,20 @@ def _predict_line_win_bundle(tenant: str, header: dict, lines: list[dict], rate_
         raise HTTPException(409, "no published (champion) model yet for m1_quote_line_win, and no "
                                  "global base model to fall back to — train and publish first")
     win_name, win_is_base, win_model = win_loaded
+    # The form exposes recognisable product SKUs from the tenant DB. A champion
+    # trained from that DB may have learned the product UUID FK instead; translate
+    # only when the UUID, rather than the SKU, is present in its vocabulary.
+    try:
+        win_categories = getattr(win_model.unwrap_python_model(), "categories", {}) or {}
+    except Exception:
+        win_categories = {}
+    trained_product_ids = {str(value) for value in win_categories.get("productID", [])}
+    product_catalog = _product_catalog(tenant)
+    for raw_line, win_record in zip(lines, win_records):
+        sku = str(raw_line.get("productID") or "").strip()
+        db_id = str(product_catalog.get(sku, {}).get("id") or "")
+        if sku not in trained_product_ids and db_id in trained_product_ids:
+            win_record["productID"] = db_id
     win_df = _coerce(pd.DataFrame(win_records), MODELS["m1_quote_line_win"]["fields"])
     try:
         win_preds = win_model.predict(win_df).to_dict(orient="records")
@@ -683,6 +831,54 @@ def _load_rate_lookup() -> dict:
     return json.loads(RATE_LOOKUP_PATH.read_text())
 
 
+def _line_win_raw_payload(payload: dict, tenant: str) -> tuple[dict, list[dict]]:
+    """Accept both the canonical raw shape and the Configurator's flat form shape.
+
+    Canonical callers send ``{header, lines}``. The flat Test Predictions schema sends
+    ``{records: [...]}``; split those records here so both paths reach the same feature
+    derivation and the same model bundle.
+    """
+    if "records" not in payload:
+        return payload.get("header") or {}, payload.get("lines") or []
+
+    records = payload.get("records") or []
+    if not isinstance(records, list) or not all(isinstance(record, dict) for record in records):
+        raise HTTPException(400, "records must be a list of objects")
+    if not records:
+        return {}, []
+
+    first = records[0]
+    header = {
+        "customerID": first.get("customerID"),
+        "salesRepID": first.get("salesRepID"),
+        "region": first.get("region", ""),
+        "leadTimeDays": first.get("leadTimeDays", 0),
+        "paymentTerms": first.get("payment_terms", first.get("paymentTerms")),
+    }
+    catalog = _product_catalog(tenant)
+    lines = []
+    for record in records:
+        sku = str(record.get("productID") or "").strip()
+        product = catalog.get(sku, {})
+        unit_price = record.get("unitPrice")
+        if unit_price in (None, ""):
+            unit_price = product.get("unit_cost")
+        sales_price = record.get("salesPrice", record.get("salesprice"))
+        if sales_price in (None, ""):
+            sales_price = product.get("sales_price")
+        list_price = record.get("list_price", record.get("listPrice"))
+        if list_price in (None, ""):
+            list_price = product.get("sales_price")
+        lines.append({
+            "productID": sku,
+            "quantity": record.get("quantity"),
+            "unitPrice": unit_price,
+            "salesPrice": sales_price,
+            "listPrice": list_price,
+        })
+    return header, lines
+
+
 @app.get("/api/{tenant}/models/{key}/predict-schema-raw")
 def predict_schema_raw(tenant: str, key: str):
     """Raw, client-facing test-input columns — what a salesperson actually has on
@@ -714,8 +910,11 @@ def predict_raw(tenant: str, key: str, payload: dict):
     m = _model_or_404(key)
     if "header_fields" not in m:
         raise HTTPException(400, f"{key} does not support raw-column testing yet")
-    header = payload.get("header") or {}
-    lines = payload.get("lines") or []
+    if key == "m1_quote_line_win":
+        header, lines = _line_win_raw_payload(payload, tenant)
+    else:
+        header = payload.get("header") or {}
+        lines = payload.get("lines") or []
     rate_lookup = _load_rate_lookup()
     try:
         if key == "m1_quote_win":
@@ -793,11 +992,37 @@ def _search_sample(df: pd.DataFrame, search: str) -> pd.DataFrame:
     return df.loc[matches]
 
 
+def _unique_value_count(series: pd.Series) -> int:
+    """Distinct non-null values in the full column, not merely the sample page."""
+    try:
+        return int(series.nunique(dropna=True))
+    except TypeError:
+        # Defensive fallback for object columns containing lists/dicts. CSV and the
+        # current DB frames are scalar, but preview metadata should remain JSON-safe
+        # when a future feature builder carries a structured value.
+        normalised = series.dropna().map(
+            lambda value: json.dumps(value, sort_keys=True, default=str)
+        )
+        return int(normalised.nunique(dropna=True))
+
+
+def _column_metadata(df: pd.DataFrame, columns: list[str]) -> list[dict]:
+    return [
+        {"name": column, "unique_value_count": _unique_value_count(df[column])}
+        for column in columns
+    ]
+
+
 def _db_column_metadata(key: str, df: pd.DataFrame, columns: list[str]) -> list[dict]:
     if key == "m2_inventory":
         from m2_inventory.db_training import column_metadata
-        return column_metadata(df, columns)
-    return db_features.column_metadata(key, columns)
+        metadata = column_metadata(df, columns)
+    else:
+        from m1_quote import db_features
+        metadata = db_features.column_metadata(key, columns)
+    counts = {item["name"]: item["unique_value_count"]
+              for item in _column_metadata(df, columns)}
+    return [{**item, "unique_value_count": counts[item["name"]]} for item in metadata]
 
 
 def _retrain_preview_response(
@@ -852,6 +1077,7 @@ def _retrain_preview_response(
     return {
         "upload_id": upload_id, "filename": filename,
         "rows": int(len(df)), "columns": columns,
+        "column_metadata": _column_metadata(df, columns),
         "required_columns": m["required"], "missing_columns": missing,
         "optional_columns": optional, "optional_present": opt_present,
         "optional_missing": opt_missing,
@@ -1209,6 +1435,7 @@ def publish(tenant: str, key: str, payload: dict):
             tags={"published_at": published_at},
         )
         result["published_at"] = published_at
+        get_training_backend().mark_published(tenant, key, str(version))
     return result
 
 

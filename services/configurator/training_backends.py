@@ -68,6 +68,8 @@ class TrainingBackend(Protocol):
               dataset_row_count: int | None = None) -> str: ...
     def status(self, run_id: str) -> dict: ...
     def active_runs(self, tenant: str) -> list[dict]: ...
+    def pending_runs(self, tenant: str) -> list[dict]: ...
+    def mark_published(self, tenant: str, model_key: str, version: str) -> None: ...
 
 
 class AzureMLBackend:
@@ -242,7 +244,8 @@ class AzureMLBackend:
                               "started_at": time.time(), "studio_url": _studio_url(submitted),
                               "version_before": version_before,
                               "progress_id": progress_id, "failure_log": None,
-                              "last_status": "running"}
+                              "last_status": "running", "published": False,
+                              "result_version": None}
         log.info("submitted AML job %s for %s/%s", run_id, tenant, model_key)
         return run_id
 
@@ -314,6 +317,7 @@ class AzureMLBackend:
                                 "by the workspace's own tracking URI")
             else:
                 out["result"] = result
+                meta["result_version"] = str(result["version"])
         elif status == "error":
             out["error"] = f"Azure ML job {run_id} finished as {job.status}"
             # The feed cannot explain a failure that happened BEFORE the job's
@@ -344,6 +348,35 @@ class AzureMLBackend:
             if current.get("status") == "running":
                 active.append(current)
         return active
+
+    def pending_runs(self, tenant: str) -> list[dict]:
+        """Refresh running jobs and retain completed candidates until publication."""
+        candidates = [
+            (run_id, meta) for run_id, meta in self._runs.items()
+            if meta["tenant"] == tenant
+            and meta.get("last_status") in ("running", "done")
+            and not meta.get("published", False)
+        ]
+        candidates.sort(key=lambda item: item[1]["started_at"], reverse=True)
+        pending = []
+        for run_id, _ in candidates:
+            current = self.status(run_id)
+            if current.get("status") in ("running", "done"):
+                pending.append(current)
+        return pending
+
+    def mark_published(self, tenant: str, model_key: str, version: str) -> None:
+        matching_started_at = next((
+            meta["started_at"] for meta in self._runs.values()
+            if meta["tenant"] == tenant and meta["model_key"] == model_key
+            and str(meta.get("result_version")) == str(version)
+        ), None)
+        if matching_started_at is None:
+            return
+        for meta in self._runs.values():
+            if (meta["tenant"] == tenant and meta["model_key"] == model_key
+                    and meta["started_at"] <= matching_started_at):
+                meta["published"] = True
 
     def _cluster_log_tail(self, run_id: str, *, lines: int = 40) -> list[str]:
         """The tail of the job's std_log.txt, or a note saying why there is none.
@@ -530,6 +563,12 @@ class _ThreadBackend:
 
     def active_runs(self, tenant: str) -> list[dict]:
         return self._jobs.active_runs(tenant)
+
+    def pending_runs(self, tenant: str) -> list[dict]:
+        return self._jobs.pending_runs(tenant)
+
+    def mark_published(self, tenant: str, model_key: str, version: str) -> None:
+        self._jobs.mark_published(tenant, model_key, version)
 
 
 _AML_SINGLETON: AzureMLBackend | None = None
