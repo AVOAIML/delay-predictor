@@ -29,6 +29,51 @@ BOOTSTRAP_WEEKS = 80
 BOOTSTRAP_ITEM_LIMIT = 50
 MIN_HISTORY_WEEKS = 80
 
+_OPERATIONAL_COLUMN_SOURCES = {
+    "item_id": ["items.id"],
+    "item_name": ["items.item_name"],
+    "part_number": ["items.part_number"],
+    "warehouse_id": ["items.default_warehouse_id"],
+    "warehouse_name": ["warehouses.warehouse_name"],
+    "item_type": ["items.item_type"],
+    "unit_cost": ["items.unit_cost"],
+    "unit_of_measurement": ["items.unit_of_measurement"],
+    "warehouse_type": ["warehouses.warehouse_type"],
+    "available_qty": ["items.available_quantity"],
+    "reserved_qty": ["mo_components.reserved_qty"],
+    "forecasted_qty": ["items.forecasted_quantity"],
+    "rop": ["items.rop"],
+    "n_products_using_item": ["bom_components.item_id", "boms.product_id"],
+    "demand_forecast_qty": ["items.custom_elements", "items.forecasted_quantity"],
+    "past_due_qty": ["items.custom_elements"],
+    "open_qty": ["purchase_order_lines.ordered_quantity",
+                 "purchase_order_lines.received_quantity"],
+    "open_po_deadline": ["purchase_orders.scheduled_delivery_date"],
+    "lead_time_days": ["item_vendors.lead_time_days"],
+    "vendor_total_completed_pos": ["goods_received_notes.purchase_order_id",
+                                   "goods_received_notes.status"],
+    "vendor_on_time_pos": ["goods_received_notes.scheduled_delivery_date",
+                            "goods_received_notes.updated_at"],
+    "vendor_late_pos": ["goods_received_notes.scheduled_delivery_date",
+                         "goods_received_notes.updated_at"],
+    "calculated_vendor_reliability": ["goods_received_notes.scheduled_delivery_date",
+                                      "goods_received_notes.updated_at"],
+    "open_po_vendor_reliability": ["purchase_orders.vendor_id",
+                                   "goods_received_notes.scheduled_delivery_date",
+                                   "goods_received_notes.updated_at"],
+    "draft_mo_status": ["manufacturing_orders.status_id", "master_data.code"],
+    "draft_mo_required_qty": ["mo_components.required_qty"],
+    "mo_status": ["manufacturing_orders.status_id", "master_data.code"],
+    "consumed_qty": ["mo_components.consumed_qty"],
+    "months_of_history": ["goods_received_notes.updated_at"],
+    "external_risk_pct": ["items.custom_elements"],
+}
+
+_BOOTSTRAP_GENERATED_COLUMNS = {
+    "snapshot_id", "item_id", "snapshot_date", "available_qty", "stockout_flag",
+    "months_of_history", "use_rule_based",
+}
+
 
 def _columns(tenant: str) -> tuple[str | None, set[str]]:
     da = get_data_access()
@@ -87,7 +132,7 @@ def _bootstrap_training_frame(tenant: str, reason: str) -> pd.DataFrame:
         raise ValueError(
             f"{reason}; operational items also returned no rows, so training cannot start"
         )
-    current, _ = apply_column_defaults(current.head(BOOTSTRAP_ITEM_LIMIT))
+    current, defaulted = apply_column_defaults(current.head(BOOTSTRAP_ITEM_LIMIT))
     start = pd.Timestamp.now(tz="UTC").tz_localize(None).normalize()
     start -= pd.Timedelta(weeks=BOOTSTRAP_WEEKS - 1)
     rows: list[dict] = []
@@ -126,6 +171,8 @@ def _bootstrap_training_frame(tenant: str, reason: str) -> pd.DataFrame:
         "fallback_used": True,
         "fallback_reason": reason,
         "source_name": "MaXXflow Database (bootstrap fallback)",
+        "defaulted_columns": [entry["column"] for entry in defaulted],
+        "generated_columns": sorted(_BOOTSTRAP_GENERATED_COLUMNS),
     })
     return frame
 
@@ -144,10 +191,43 @@ def build_training_frame(tenant: str) -> pd.DataFrame:
             )
             problem = _history_problem(columns, frame)
             if problem is None:
-                return apply_column_defaults(frame)[0]
+                frame, defaulted = apply_column_defaults(frame)
+                frame.attrs.update({
+                    "fallback_used": False,
+                    "source_name": "MaXXflow Database",
+                    "defaulted_columns": [entry["column"] for entry in defaulted],
+                    "generated_columns": [],
+                })
+                return frame
         except Exception as exc:
             problem = f"{TABLE} could not be read ({type(exc).__name__}: {exc})"
     return _bootstrap_training_frame(tenant, problem)
+
+
+def column_metadata(frame: pd.DataFrame, columns: list[str]) -> list[dict]:
+    fallback = bool(frame.attrs.get("fallback_used"))
+    defaulted = set(frame.attrs.get("defaulted_columns", []))
+    generated = set(frame.attrs.get("generated_columns", []))
+    metadata = []
+    for column in columns:
+        if not fallback and column not in defaulted:
+            source_columns = [f"{TABLE}.{column}"]
+            derived = False
+        elif column in defaulted:
+            source_columns = []
+            derived = True
+        else:
+            source_columns = _OPERATIONAL_COLUMN_SOURCES.get(column, [])
+            derived = fallback or column in generated
+        tables = list(dict.fromkeys(value.split(".", 1)[0] for value in source_columns))
+        metadata.append({
+            "name": column,
+            "table": tables[0] if tables else None,
+            "source_tables": tables,
+            "source_columns": list(source_columns),
+            "derived": derived,
+        })
+    return metadata
 
 
 def describe_sources(tenant: str) -> dict:

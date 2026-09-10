@@ -24,7 +24,6 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
 
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
@@ -51,6 +50,7 @@ from m1_quote.raw_ingest import (
     RAW_REQUIRED_COLS,
 )
 from m2_inventory import csv_training as inventory_csv
+from m2_inventory.db_prediction import read_db_prediction_snapshots
 from m2_inventory.inventory_dataset import InventoryDatasetBuilder, MODEL_INPUT_COLUMNS
 from services.configurator import jobs
 from services.configurator.security import AuthContext, install_security
@@ -134,10 +134,9 @@ MODELS = {
     },
     "m1_quote_line_win": {
         "title": "Smart Quote Optimiser", "model_type": "Classification Model",
-        "description": "Predicts a calibrated Win Probability, recommended Price Band and a "
-                       "Confidence Level for EACH product line in a quote — not just the quote "
-                       "overall (unlike m1_quote_win). Ground truth is only recorded per quotation, "
-                       "so a quote's outcome is broadcast onto every one of its lines for training.",
+        "description": "Enhances quote accuracy by analysing past successes and associated product "
+                       "pricing. Helps sales teams win more jobs while maintaining profitability "
+                       "with “Win Probability” scores.",
         "predicts": "won (per-product win probability, bundled with the price-model's band)",
         "trainer": csv_line_win,
         "required": RAW_REQUIRED_COLS,
@@ -212,8 +211,9 @@ MODELS = {
     },
     "m2_inventory": {
         "title": "Predictive Inventory Alerts", "model_type": "Hazard Classification",
-        "description": "Compares Logistic Regression, Random Forest, LightGBM and XGBoost "
-                       "to predict product stockout risk over the next 30 and 60 days.",
+        "description": "Forecasts stock-out risks using AI-driven analysis of historical usage "
+                       "and supplier behaviour. Enables smarter procurement decisions and reduces "
+                       "costly production halts.",
         "predicts": "30-day and 60-day stockout risk", "trainer": inventory_csv,
         "required": sorted(InventoryDatasetBuilder.required_columns),
         "optional": [
@@ -413,10 +413,49 @@ def _enrich_options(fields: list[dict], cats: dict) -> list[dict]:
     return out
 
 
+def _region_options(tenant: str) -> list[str]:
+    """Distinct customer regions/states already on file for this tenant, read live
+    from `contacts.state` — there is no dedicated master-data table for region, so
+    this beats a champion's frozen training vocab (or an empty box) for a field a
+    salesperson expects to pick a real, current value from."""
+    try:
+        from maxxflow_data.engine import get_data_access
+
+        da = get_data_access()
+        if not da.settings.db_enabled:
+            return []
+        df = da.query(
+            "SELECT DISTINCT state FROM contacts "
+            "WHERE state IS NOT NULL AND state <> '' AND deleted_at IS NULL "
+            "ORDER BY state",
+            tenant=tenant,
+        )
+        return [str(v) for v in df["state"].tolist()]
+    except Exception:
+        return []
+
+
+def _apply_region_options(fields: list[dict], tenant: str) -> list[dict]:
+    """Override the `region` category field's options with live tenant data, when
+    any exists. Leaves every other field — and `region` itself when the tenant has
+    no contacts with a state on file yet — untouched."""
+    regions = _region_options(tenant)
+    if not regions:
+        return fields
+    out = []
+    for f in fields:
+        if f["name"] == "region" and f["type"] == "category":
+            f = dict(f)
+            f["options"] = regions
+        out.append(f)
+    return out
+
+
 @app.get("/api/{tenant}/models/{key}/predict-schema")
 def predict_schema(tenant: str, key: str):
     m = _model_or_404(key)
     fields = _enrich_options(m["fields"], _champion_categories(tenant, key))
+    fields = _apply_region_options(fields, tenant)
     return {"model": key, "fields": fields}
 
 
@@ -658,8 +697,10 @@ def predict_schema_raw(tenant: str, key: str):
         # Prediction input, so do not return a dependency on a field that the form
         # cannot render; the full product vocabulary remains available.
         graph = {name: spec for name, spec in graph.items() if name != "productID"}
+    header_fields = _apply_option_graph(_enrich_options(m["header_fields"], cats), graph)
+    header_fields = _apply_region_options(header_fields, tenant)
     return {"model": key,
-            "header_fields": _apply_option_graph(_enrich_options(m["header_fields"], cats), graph),
+            "header_fields": header_fields,
             "line_fields": _apply_option_graph(_enrich_options(m["line_fields"], cats), graph)}
 
 
@@ -705,6 +746,60 @@ def _preview_page(items: Sequence, page: int, page_size: int) -> tuple[list, dic
     }
 
 
+def _column_search(value: object) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise HTTPException(400, "column_search must be a string")
+    search = value.strip()
+    if len(search) > 100:
+        raise HTTPException(400, "column_search must be 100 characters or fewer")
+    return search
+
+
+def _sample_search(value: object) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise HTTPException(400, "sample_search must be a string")
+    search = value.strip()
+    if len(search) > 100:
+        raise HTTPException(400, "sample_search must be 100 characters or fewer")
+    return search
+
+
+def _sample_preview_page_size(value: int) -> int:
+    if value not in _SAMPLE_PREVIEW_PAGE_SIZES:
+        allowed = ", ".join(str(size) for size in _SAMPLE_PREVIEW_PAGE_SIZES)
+        raise HTTPException(400, f"sample_page_size must be one of: {allowed}")
+    return value
+
+
+def _search_columns(columns: Sequence[str], search: str) -> list[str]:
+    if not search:
+        return list(columns)
+    needle = search.casefold()
+    return [column for column in columns if needle in column.casefold()]
+
+
+def _search_sample(df: pd.DataFrame, search: str) -> pd.DataFrame:
+    if not search or df.empty:
+        return df
+    matches = pd.Series(False, index=df.index)
+    for column in df.columns:
+        matches |= df[column].astype("string").str.contains(
+            search, case=False, regex=False, na=False,
+        )
+    return df.loc[matches]
+
+
+def _db_column_metadata(key: str, df: pd.DataFrame, columns: list[str]) -> list[dict]:
+    if key == "m2_inventory":
+        from m2_inventory.db_training import column_metadata
+        return column_metadata(df, columns)
+    return db_features.column_metadata(key, columns)
+
+
 def _retrain_preview_response(
     *,
     key: str,
@@ -712,11 +807,17 @@ def _retrain_preview_response(
     filename: str,
     df: pd.DataFrame,
     columns_page: int,
+    columns_page_size: int,
     sample_page: int,
     sample_page_size: int,
+    column_search: str = "",
+    sample_search: str = "",
 ) -> dict:
     """Build the validation result with independently paginated columns and rows."""
     m = _model_or_404(key)
+    column_search = _column_search(column_search)
+    sample_search = _sample_search(sample_search)
+    sample_page_size = _sample_preview_page_size(sample_page_size)
     missing = [c for c in m["required"] if c not in df.columns]
     # Optional columns never block an upload: raw_ingest synthesizes a neutral
     # value for each (no revision chain, negotiated price falls back to the quoted
@@ -730,16 +831,23 @@ def _retrain_preview_response(
         f"Dataset is valid. {len(opt_missing)} optional column(s) absent — these are "
         f"filled in automatically, but supplying them trains a better model: "
         f"{', '.join(opt_missing)}.")
+    all_columns = list(df.columns)
+    matching_columns = _search_columns(all_columns, column_search)
     columns, columns_pagination = _preview_page(
-        list(df.columns), columns_page, _COLUMN_PREVIEW_PAGE_SIZE,
+        matching_columns, columns_page, columns_page_size,
     )
     # Convert through pandas' JSON encoder so NaN becomes JSON null. Slicing before
     # conversion also avoids serialising the complete uploaded dataset for every page.
+    matching_sample = _search_sample(df, sample_search)
     sample_start = (sample_page - 1) * sample_page_size
     sample = json.loads(
-        df.iloc[sample_start:sample_start + sample_page_size].to_json(orient="records")
+        matching_sample.iloc[sample_start:sample_start + sample_page_size].to_json(
+            orient="records"
+        )
     )
-    _, sample_pagination = _preview_page(range(len(df)), sample_page, sample_page_size)
+    _, sample_pagination = _preview_page(
+        range(len(matching_sample)), sample_page, sample_page_size,
+    )
 
     return {
         "upload_id": upload_id, "filename": filename,
@@ -750,6 +858,14 @@ def _retrain_preview_response(
         "valid": not missing,
         "message": msg,
         "sample": sample,
+        "search": {
+            "column_search": column_search,
+            "matched_columns": len(matching_columns),
+            "total_columns": len(all_columns),
+            "sample_search": sample_search,
+            "matched_rows": len(matching_sample),
+            "total_rows": len(df),
+        },
         "pagination": {
             "columns": columns_pagination,
             "sample": {
@@ -784,8 +900,11 @@ async def retrain_preview(
     key: str,
     file: UploadFile = File(...),
     columns_page: int = Query(1, ge=1),
+    columns_page_size: int = Query(_COLUMN_PREVIEW_PAGE_SIZE, ge=1, le=100),
     sample_page: int = Query(1, ge=1),
-    sample_page_size: Literal[5, 10, 50, 100] = Query(5),
+    sample_page_size: int = Query(5),
+    column_search: str = Query("", max_length=100),
+    sample_search: str = Query("", max_length=100),
 ):
     _model_or_404(key)
     upload_id = uuid.uuid4().hex[:12]
@@ -803,8 +922,11 @@ async def retrain_preview(
         filename=filename,
         df=df,
         columns_page=columns_page,
+        columns_page_size=columns_page_size,
         sample_page=sample_page,
         sample_page_size=sample_page_size,
+        column_search=_column_search(column_search),
+        sample_search=_sample_search(sample_search),
     )
 
 
@@ -814,8 +936,11 @@ def retrain_preview_page(
     key: str,
     upload_id: str,
     columns_page: int = Query(1, ge=1),
+    columns_page_size: int = Query(_COLUMN_PREVIEW_PAGE_SIZE, ge=1, le=100),
     sample_page: int = Query(1, ge=1),
-    sample_page_size: Literal[5, 10, 50, 100] = Query(5),
+    sample_page_size: int = Query(5),
+    column_search: str = Query("", max_length=100),
+    sample_search: str = Query("", max_length=100),
 ):
     """Read another preview page without uploading the same dataset again."""
     _model_or_404(key)
@@ -826,8 +951,11 @@ def retrain_preview_page(
         filename=filename,
         df=pd.read_csv(path),
         columns_page=columns_page,
+        columns_page_size=columns_page_size,
         sample_page=sample_page,
         sample_page_size=sample_page_size,
+        column_search=_column_search(column_search),
+        sample_search=_sample_search(sample_search),
     )
 
 
@@ -909,6 +1037,8 @@ def read_data_from_mrp(tenant: str, key: str, payload: dict | None = None):
     """
     _model_or_404(key)
     payload = payload or {}
+    column_search = _column_search(payload.get("column_search"))
+    sample_search = _sample_search(payload.get("sample_search"))
     try:
         columns_page = int(payload.get("columns_page", 1))
         sample_page = int(payload.get("sample_page", 1))
@@ -927,7 +1057,8 @@ def read_data_from_mrp(tenant: str, key: str, payload: dict | None = None):
         return {"ok": False, "model": key, "tenant": tenant,
                 "error": f"{key} has no DB-path builder — it is CSV-upload only. "
                          f"Models with a DB path: {', '.join(jobs.db_models())}.",
-                "rows": 0, "columns": [], "dtypes": {}, "sample": []}
+                "rows": 0, "columns": [], "column_metadata": [],
+                "dtypes": {}, "sample": []}
 
     dt = _data_tenant(tenant)
     t0 = time.perf_counter()
@@ -936,17 +1067,24 @@ def read_data_from_mrp(tenant: str, key: str, payload: dict | None = None):
     except Exception as e:
         return {"ok": False, "model": key, "tenant": tenant, "data_tenant": dt,
                 "error": f"{type(e).__name__}: {e}",
-                "rows": 0, "columns": [], "dtypes": {}, "sample": []}
+                "rows": 0, "columns": [], "column_metadata": [],
+                "dtypes": {}, "sample": []}
 
     rows, all_columns = int(len(df)), list(df.columns)
+    matching_columns = _search_columns(all_columns, column_search)
     columns, columns_pagination = _preview_page(
-        all_columns, columns_page, _COLUMN_PREVIEW_PAGE_SIZE,
+        matching_columns, columns_page, _COLUMN_PREVIEW_PAGE_SIZE,
     )
+    matching_sample = _search_sample(df, sample_search)
     sample_start = (sample_page - 1) * sample_page_size
     sample = json.loads(
-        df.iloc[sample_start:sample_start + sample_page_size].to_json(orient="records")
+        matching_sample.iloc[sample_start:sample_start + sample_page_size].to_json(
+            orient="records"
+        )
     )
-    _, sample_pagination = _preview_page(range(rows), sample_page, sample_page_size)
+    _, sample_pagination = _preview_page(
+        range(len(matching_sample)), sample_page, sample_page_size,
+    )
     # Empty is not an error — it is the single most useful thing this endpoint
     # can tell you, and it is invisible from a row count on the source tables.
     if rows == 0:
@@ -962,10 +1100,19 @@ def read_data_from_mrp(tenant: str, key: str, payload: dict | None = None):
     return {
         "ok": True, "model": key, "tenant": tenant, "data_tenant": dt,
         "rows": rows, "columns": columns,
+        "column_metadata": _db_column_metadata(key, df, columns),
         "dtypes": {c: str(df.dtypes[c]) for c in columns},
         "sample": sample,
         "sample_size": len(sample),
         "truncated": sample_pagination["total_pages"] > 1,
+        "search": {
+            "column_search": column_search,
+            "matched_columns": len(matching_columns),
+            "total_columns": len(all_columns),
+            "sample_search": sample_search,
+            "matched_rows": len(matching_sample),
+            "total_rows": rows,
+        },
         "pagination": {
             "columns": columns_pagination,
             "sample": {
@@ -1067,29 +1214,22 @@ def publish(tenant: str, key: str, payload: dict):
 
 @app.get("/api/{tenant}/inventory-dashboard")
 def inventory_dashboard(tenant: str):
-    """Score the newest CSV snapshot for every product/warehouse combination."""
-    builder = InventoryDatasetBuilder()
+    """Bulk-score current tenant inventory from PostgreSQL with the live champion."""
     try:
-        snapshots = builder.load(_INVENTORY_CSV)
+        snapshots = read_db_prediction_snapshots(tenant, datetime.now(timezone.utc))
+        if snapshots.empty:
+            raise ValueError("the tenant database returned no inventory items")
         latest = (
             snapshots.sort_values("snapshot_date")
             .groupby(["item_id", "warehouse_id"], as_index=False, sort=False)
             .tail(1)
             .reset_index(drop=True)
         )
-        # This dashboard is CSV-backed by default: it uses the selected artifact
-        # written by the most recent wizard/CLI CSV run, so it stays available
-        # even when nothing has been published yet. But that artifact is only
-        # ever the BEST of the 4 candidates trained together — if all 4 failed
-        # the quality floor, score_latest_csv_snapshots falls back to the
-        # published MLflow champion instead of silently serving a failing
-        # model (the floor already blocks *promotion*; this closes the same
-        # gap for this CSV-artifact read path).
-        risks = inventory_csv.score_latest_csv_snapshots(
-            tenant, _INVENTORY_CSV, _INVENTORY_ARTIFACTS
+        risks, algorithm = inventory_csv._score_via_champion(
+            tenant, inventory_csv._coerce_model_input(latest)
         )
-        model_source = "latest CSV evaluation winner (or published champion, if that run failed the quality floor)"
-    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        model_source = "published MLflow champion"
+    except Exception as exc:
         raise HTTPException(409, f"inventory dashboard is not ready: {exc}") from exc
 
     risk_columns = [
@@ -1106,12 +1246,15 @@ def inventory_dashboard(tenant: str):
         reserved = number(row.reserved_qty)
         rows.append({
             "item_id": str(row.item_id),
+            "item_name": str(getattr(row, "item_name", "") or row.item_id),
             "product": str(getattr(row, "item_name", "") or row.item_id),
             "part_number": str(getattr(row, "part_number", "") or ""),
             "warehouse": str(getattr(row, "warehouse_name", "") or row.warehouse_id),
             "quantity": available,
             "reserved_quantity": reserved,
-            "available_quantity": available - reserved,
+            "available_quantity": available,
+            "net_available_quantity": available - reserved,
+            "rop": number(row.rop),
             "reorder_point": number(row.rop),
             "forecast_quantity": number(row.demand_forecast_qty),
             "risk_30d": float(row.risk_30d),
@@ -1119,38 +1262,15 @@ def inventory_dashboard(tenant: str):
             "badge_30d": str(row.badge_30d),
             "badge_60d": str(row.badge_60d),
             "suppressed": bool(row.suppressed),
+            "model_version": str(row.model_version),
         })
-    summary_path = _INVENTORY_ARTIFACTS / "training_summary.json"
-    selected_model = None
-    model_metrics = []
-    selection_warning = None
-    if summary_path.exists():
-        try:
-            training_summary = json.loads(summary_path.read_text())
-            selected_model = training_summary["selected_model"]
-            selection_warning = training_summary.get("selection_warning")
-            metric_names = [
-                "algorithm", "calibration_method", "test_rows", "positive_rate",
-                "accuracy", "base_rate_accuracy", "accuracy_over_base_rate",
-                "weekly_auc", "weekly_brier", "weekly_ece",
-                "risk_30d_auc", "risk_30d_brier", "risk_30d_ece",
-                "risk_60d_auc", "risk_60d_brier", "risk_60d_ece",
-                "quality_floor_passed",
-            ]
-            model_metrics = [
-                {name: candidate.get(name) for name in metric_names}
-                | {"selected": candidate.get("algorithm") == selected_model}
-                for candidate in training_summary.get("models", [])
-            ]
-        except (KeyError, OSError, json.JSONDecodeError):
-            pass
     return {
         "tenant": tenant,
         "snapshot_date": latest["snapshot_date"].max().date().isoformat(),
         "model_source": model_source,
-        "selected_model": selected_model,
-        "model_metrics": model_metrics,
-        "selection_warning": selection_warning,
+        "selected_model": algorithm,
+        "model_metrics": [],
+        "selection_warning": None,
         "rows": rows,
         "summary": {
             "products": len(rows),

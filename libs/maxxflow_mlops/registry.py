@@ -22,7 +22,8 @@ from mlflow.tracking import MlflowClient
 
 from maxxflow_core.errors import RegistryRoutingError, get_logger
 from maxxflow_core.settings import get_settings
-from maxxflow_mlops.naming import GLOBAL_TENANT, global_model_name, registered_model_name
+from maxxflow_mlops.naming import (GLOBAL_TENANT, global_model_name, parse_model_name,
+                                   registered_model_name)
 
 log = get_logger("maxxflow_mlops.registry")
 
@@ -102,6 +103,37 @@ def detach_from_ambient_tracking() -> list[str]:
     return cleared
 
 
+def _ensure_tenant_experiment(experiment_name: str, *, registered_name: str,
+                              tracking_uri: str) -> None:
+    """Get-or-create ``experiment_name``, pinning a NEW experiment's artifact
+    storage under that tenant's own path.
+
+    MLflow only lets you set ``artifact_location`` at creation time — it cannot be
+    changed on an experiment that already exists — so this only takes effect the
+    first time a (tenant, module) trains. Uses the ``mlflow-artifacts:/`` proxy
+    scheme (not a raw ``abfss://``/``wasbs://`` URI): the tracking server resolves
+    that path against its own ``--default-artifact-root`` and physically talks to
+    Azure Storage on the caller's behalf, so training/serving processes never need
+    Azure Storage credentials of their own — only the MLflow server does.
+
+    Only applies against an actual HTTP(S) tracking server, i.e. one that can be
+    running ``--serve-artifacts`` to resolve that scheme. The local/test fallback
+    (embedded ``sqlite:///...``, no server in front of it — see ``_resolve_uri``)
+    has nothing to proxy through, so this is a no-op there and
+    ``mlflow.set_experiment`` falls back to its own default artifact_location,
+    exactly as before this tenant-path change.
+    """
+    if not tracking_uri.startswith(("http://", "https://")):
+        return
+    if mlflow.get_experiment_by_name(experiment_name) is not None:
+        return
+    tenant, module = parse_model_name(registered_name)
+    mlflow.create_experiment(
+        experiment_name,
+        artifact_location=f"mlflow-artifacts:/{tenant}/modelartifacts/{module}",
+    )
+
+
 class MLflowRegistry:
     """Adapter implementing :class:`maxxflow_core.ports.ModelRegistry`."""
 
@@ -149,7 +181,10 @@ class MLflowRegistry:
         (so cloudpickle references it by path — uniform BYOC serving). Returns the
         new version number as a string.
         """
-        mlflow.set_experiment(experiment or name)
+        experiment_name = experiment or name
+        _ensure_tenant_experiment(experiment_name, registered_name=name,
+                                  tracking_uri=self.tracking_uri)
+        mlflow.set_experiment(experiment_name)
         with mlflow.start_run() as run:
             if params:
                 mlflow.log_params(dict(params))

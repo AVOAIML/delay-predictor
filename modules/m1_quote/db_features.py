@@ -109,6 +109,92 @@ _SOURCE_SPEC = {
     },
 }
 
+_COLUMN_PROVENANCE = {
+    "tenant": ([], [], True),
+    "quotationLineItemID": (["quotation_line_items"], ["quotation_line_items.id"], False),
+    "grand_total": (["quotations"], ["quotations.grand_total"], False),
+    "productID": (["quotation_line_items"], ["quotation_line_items.product_id"], False),
+    "productName": (["products"], ["products.name"], False),
+    "quantity": (["quotation_line_items"], ["quotation_line_items.quantity"], False),
+    "unitPrice": (["quotation_line_items"], ["quotation_line_items.unit_price"], False),
+    "total_quantity": (["quotation_line_items"], ["quotation_line_items.quantity"], True),
+    "line_count": (["quotation_line_items"], ["quotation_line_items.id"], True),
+    "n_products": (["quotation_line_items"], ["quotation_line_items.product_id"], True),
+    "wtd_price_ratio": (
+        ["quotation_line_items"],
+        ["quotation_line_items.sales_price", "quotation_line_items.unit_price",
+         "quotation_line_items.line_amount"],
+        True,
+    ),
+    "mean_price_ratio": (
+        ["quotation_line_items"],
+        ["quotation_line_items.sales_price", "quotation_line_items.unit_price"],
+        True,
+    ),
+    "min_price_ratio": (
+        ["quotation_line_items"],
+        ["quotation_line_items.sales_price", "quotation_line_items.unit_price"],
+        True,
+    ),
+    "avg_discount_pct": (
+        ["quotation_line_items"],
+        ["quotation_line_items.sales_price", "quotation_line_items.unit_price"],
+        True,
+    ),
+    "price_ratio": (
+        ["quotation_line_items"],
+        ["quotation_line_items.sales_price", "quotation_line_items.unit_price"],
+        True,
+    ),
+    "contact_win_rate": (
+        ["quotations", "master_data"],
+        ["quotations.contact_id", "quotations.created_at", "quotations.stage_id",
+         "quotations.status_id", "quotations.sales_order_id", "master_data.code"],
+        True,
+    ),
+    "salesrep_win_rate": (
+        ["quotations", "master_data"],
+        ["quotations.sales_person_id", "quotations.created_at", "quotations.stage_id",
+         "quotations.status_id", "quotations.sales_order_id", "master_data.code"],
+        True,
+    ),
+    "won": (
+        ["quotations", "master_data"],
+        ["quotations.stage_id", "quotations.status_id", "quotations.sales_order_id",
+         "master_data.code"],
+        True,
+    ),
+}
+
+_MODEL_COLUMN_PROVENANCE = {
+    "m1_quote_win": {
+        "quotationID": (["quotations"], ["quotations.id"], False),
+    },
+    "m1_quote_price": {
+        "quotationID": (["quotation_line_items"], ["quotation_line_items.quotation_id"], False),
+    },
+    "m1_quote_line_win": {
+        "quotationID": (["quotation_line_items"], ["quotation_line_items.quotation_id"], False),
+    },
+}
+
+
+def column_metadata(model_key: str, columns: list[str]) -> list[dict]:
+    metadata = []
+    for column in columns:
+        provenance = _MODEL_COLUMN_PROVENANCE.get(model_key, {}).get(
+            column, _COLUMN_PROVENANCE.get(column, ([], [], True))
+        )
+        tables, source_columns, derived = provenance
+        metadata.append({
+            "name": column,
+            "table": tables[0] if tables else None,
+            "source_tables": list(tables),
+            "source_columns": list(source_columns),
+            "derived": derived,
+        })
+    return metadata
+
 
 def describe_sources(tenant: str, model_key: str) -> dict:
     """Honest report for the Configurator 'Connect Database' step: which RAW source
