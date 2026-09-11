@@ -99,15 +99,6 @@ class Settings(BaseSettings):
 
     # --- environment identity -------------------------------------------------
     app_env: str = Field(default=_DEFAULT_ENV, alias="APP_ENV")
-    # Explicit local-only escape hatch for exercising protected HTTP endpoints
-    # without the application's identity/RBAC database. It is ignored by every
-    # non-local profile even if the flag is accidentally configured there.
-    local_auth_bypass: bool = Field(default=False, alias="LOCAL_AUTH_BYPASS")
-    local_tenant_slug: str = Field(default="", alias="LOCAL_TENANT_SLUG")
-
-    @property
-    def local_auth_bypass_enabled(self) -> bool:
-        return self.app_env == _DEFAULT_ENV and self.local_auth_bypass
 
     # --- feature data source (Postgres: local container OR Azure read replica)
     # The DAL is the ONLY consumer. Tenant isolation is SET search_path, never

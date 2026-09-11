@@ -19,6 +19,8 @@ from typing import Any, Mapping
 
 import mlflow
 from mlflow.exceptions import MlflowException
+from mlflow.protos.databricks_pb2 import (RESOURCE_ALREADY_EXISTS,
+                                          RESOURCE_DOES_NOT_EXIST, ErrorCode)
 from mlflow.tracking import MlflowClient
 
 from maxxflow_core.errors import RegistryRoutingError, get_logger
@@ -43,6 +45,34 @@ _PYFUNC_PIP = [
     "cloudpickle",
     "scipy",
 ]
+
+_ALREADY_EXISTS = ErrorCode.Name(RESOURCE_ALREADY_EXISTS)
+_DOES_NOT_EXIST = ErrorCode.Name(RESOURCE_DOES_NOT_EXIST)
+
+
+def _ensure_registered_model(client: MlflowClient, name: str,
+                             tags: Mapping[str, Any]) -> None:
+    """Create ``name`` only when an exact lookup confirms it is absent.
+
+    A concurrent creator is the sole recoverable create failure. Permission,
+    network, authentication and tracking-server failures are re-raised from the
+    operation that produced them, preserving the original exception and traceback.
+    """
+    try:
+        client.get_registered_model(name)
+        return
+    except MlflowException as lookup_error:
+        if lookup_error.error_code != _DOES_NOT_EXIST:
+            raise
+
+    try:
+        client.create_registered_model(name, tags=dict(tags))
+    except MlflowException as create_error:
+        if create_error.error_code != _ALREADY_EXISTS:
+            raise
+        # The create raced with another worker. Confirm that the exact model now
+        # exists; failure here is a new lookup failure and should be reported as such.
+        client.get_registered_model(name)
 
 
 def _resolve_uri() -> str:
@@ -207,16 +237,7 @@ class MLflowRegistry:
                 pip_requirements=_PYFUNC_PIP,
             )
             mlflow.set_tag(LAKE_ARTIFACT_URI_TAG, lake_uri)
-            try:
-                self.client.get_registered_model(name)
-            except MlflowException:
-                try:
-                    self.client.create_registered_model(name, tags=dict(tags))
-                except MlflowException:
-                    # Another worker may have created the same registered model
-                    # between the exact lookup and create calls. Confirm it now;
-                    # any real registry failure still propagates.
-                    self.client.get_registered_model(name)
+            _ensure_registered_model(self.client, name, tags)
             version_tags = {**dict(tags), LAKE_ARTIFACT_URI_TAG: lake_uri}
             mv = self.client.create_model_version(
                 name=name,

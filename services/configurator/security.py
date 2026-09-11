@@ -308,30 +308,11 @@ def _required_permission(request: Request) -> str | None:
 
 def authenticate_request(request: Request) -> AuthContext:
     """Authenticate one /api request and bind it to its requested tenant."""
-    settings = get_settings()
-    tenant_slug = (
-        request.headers.get("x-tenant-slug", "").strip()
-        or settings.local_tenant_slug.strip()
-    )
+    claims = get_jwt_verifier().verify(_extract_token(request))
+    tenant_slug = request.headers.get("x-tenant-slug", "").strip()
     if not tenant_slug:
         raise HTTPException(403, "x-tenant-slug is required")
-
-    if settings.local_auth_bypass_enabled:
-        configured_tenant = settings.local_tenant_slug.strip()
-        if configured_tenant and tenant_slug != configured_tenant:
-            raise HTTPException(403, "Local tenant does not match x-tenant-slug")
-        context = AuthContext(
-            user_id="local-development-user",
-            email="local-development@localhost",
-            tenant_id="local-development-tenant",
-            tenant_slug=tenant_slug,
-            roles=frozenset({"maxxflow-admin"}),
-            permissions=frozenset({"*:*"}),
-            is_ci_admin=True,
-        )
-    else:
-        claims = get_jwt_verifier().verify(_extract_token(request))
-        context = get_auth_repository().authorize(claims, tenant_slug)
+    context = get_auth_repository().authorize(claims, tenant_slug)
 
     path_match = _TENANT_PATH.match(request.url.path)
     if path_match:
