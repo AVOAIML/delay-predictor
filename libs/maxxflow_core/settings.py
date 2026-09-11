@@ -99,6 +99,15 @@ class Settings(BaseSettings):
 
     # --- environment identity -------------------------------------------------
     app_env: str = Field(default=_DEFAULT_ENV, alias="APP_ENV")
+    # Explicit local-only escape hatch for exercising protected HTTP endpoints
+    # without the application's identity/RBAC database. It is ignored by every
+    # non-local profile even if the flag is accidentally configured there.
+    local_auth_bypass: bool = Field(default=False, alias="LOCAL_AUTH_BYPASS")
+    local_tenant_slug: str = Field(default="", alias="LOCAL_TENANT_SLUG")
+
+    @property
+    def local_auth_bypass_enabled(self) -> bool:
+        return self.app_env == _DEFAULT_ENV and self.local_auth_bypass
 
     # --- feature data source (Postgres: local container OR Azure read replica)
     # The DAL is the ONLY consumer. Tenant isolation is SET search_path, never
@@ -114,6 +123,12 @@ class Settings(BaseSettings):
     pg_sslmode: str = Field(default="require", alias="PGSSLMODE")
     # ML reads features from the REPLICA in prod, never the primary (plan §1a).
     data_db_is_replica: bool = Field(default=False, alias="DATA_DB_IS_REPLICA")
+    # One SQLAlchemy pool is shared by the process. Keep the limits explicit so a
+    # Container App replica cannot open an unbounded number of Postgres sessions.
+    db_pool_size: int = Field(default=5, alias="DB_POOL_SIZE", ge=1)
+    db_pool_max_overflow: int = Field(default=10, alias="DB_POOL_MAX_OVERFLOW", ge=0)
+    db_pool_timeout_seconds: int = Field(default=30, alias="DB_POOL_TIMEOUT_SECONDS", ge=1)
+    db_pool_recycle_seconds: int = Field(default=300, alias="DB_POOL_RECYCLE_SECONDS", ge=1)
 
     # --- medallion lake (minio S3 local  <->  ADLS Gen2 prod) -----------------
     # Only the protocol differs (s3:// vs abfss://); set by env.
@@ -121,6 +136,9 @@ class Settings(BaseSettings):
     lake_key: SecretStr = Field(default=SecretStr(""), alias="LAKE_KEY")
     lake_secret: SecretStr = Field(default=SecretStr(""), alias="LAKE_SECRET")
     lake_endpoint_url: str = Field(default="", alias="LAKE_ENDPOINT_URL")
+    azure_storage_connection_string: SecretStr = Field(
+        default=SecretStr(""), alias="AZURE_STORAGE_CONNECTION_STRING"
+    )
 
     # --- MLflow (self-hosted local  <->  Azure ML workspace; same MLflow API) -
     mlflow_tracking_uri: str = Field(default="", alias="MLFLOW_TRACKING_URI")
@@ -203,7 +221,7 @@ class Settings(BaseSettings):
 
     @property
     def lake_storage_options(self) -> dict:
-        """fsspec storage_options. Only populated for S3/MinIO; empty for file://."""
+        """Credentials/options for the fsspec implementation selected by LAKE_URI."""
         if self.lake_uri.startswith("s3://"):
             opts: dict = {
                 "key": self.lake_key.get_secret_value() or None,
@@ -212,6 +230,9 @@ class Settings(BaseSettings):
             if self.lake_endpoint_url:
                 opts["client_kwargs"] = {"endpoint_url": self.lake_endpoint_url}
             return {k: v for k, v in opts.items() if v is not None}
+        if self.lake_uri.startswith(("abfs://", "abfss://")):
+            connection_string = self.azure_storage_connection_string.get_secret_value()
+            return {"connection_string": connection_string} if connection_string else {}
         return {}
 
     @model_validator(mode="after")

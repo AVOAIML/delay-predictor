@@ -8,6 +8,7 @@ A read-path guard refuses any SQL that references ``tenant_id`` or the stale
 
 from __future__ import annotations
 
+import functools
 import re
 from contextlib import contextmanager
 from typing import Any, Mapping
@@ -42,7 +43,14 @@ class DataAccess:
             if not self.settings.db_enabled:
                 raise RuntimeError("DATA_DB_URL is empty — no database configured (DB-less mode)")
             import sqlalchemy as sa
-            self._engine = sa.create_engine(self.settings.data_db_url, pool_pre_ping=True)
+            self._engine = sa.create_engine(
+                self.settings.data_db_url,
+                pool_size=self.settings.db_pool_size,
+                max_overflow=self.settings.db_pool_max_overflow,
+                pool_timeout=self.settings.db_pool_timeout_seconds,
+                pool_recycle=self.settings.db_pool_recycle_seconds,
+                pool_pre_ping=True,
+            )
         return self._engine
 
     def _set_search_path(self, conn, tenant: str | None) -> None:
@@ -87,5 +95,7 @@ class DataAccess:
             yield conn
 
 
+@functools.lru_cache(maxsize=1)
 def get_data_access() -> DataAccess:
+    """One DataAccess—and therefore one bounded connection pool—per process."""
     return DataAccess()

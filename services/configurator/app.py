@@ -32,6 +32,7 @@ from fastapi.responses import JSONResponse
 
 from mlflow.exceptions import MlflowException
 
+from maxxflow_core.clock import get_clock
 from maxxflow_mlops.naming import GLOBAL_TENANT, registered_model_name
 from maxxflow_mlops.registry import MLflowRegistry
 from m1_quote import csv_line_win, csv_mil, csv_price, csv_win
@@ -50,10 +51,12 @@ from m1_quote.raw_ingest import (
     RAW_REQUIRED_COLS,
     price_ratio_for,
 )
+from m2_inventory import batch_scoring as inventory_batch
 from m2_inventory import csv_training as inventory_csv
 from m2_inventory.db_prediction import read_db_prediction_snapshots
 from m2_inventory.inventory_dataset import InventoryDatasetBuilder, MODEL_INPUT_COLUMNS
 from services.configurator import jobs
+from services.configurator.result_store import get_training_result_store
 from services.configurator.security import AuthContext, install_security
 from services.configurator.training_backends import get_training_backend
 
@@ -307,14 +310,18 @@ def health():
 def list_models(tenant: str):
     reg = MLflowRegistry()
     try:
-        pending_by_model = {
-            run["model_key"]: run
-            for run in reversed(get_training_backend().pending_runs(tenant))
-        }
+        durable = get_training_result_store().pending(tenant)
+    except Exception:
+        durable = []
+    try:
+        live = get_training_backend().pending_runs(tenant)
     except Exception:
         # Model discovery must remain available if the training backend itself is
         # temporarily unreachable. The Train screen will surface its detailed error.
-        pending_by_model = {}
+        live = []
+    pending_by_model = {}
+    for run in sorted([*durable, *live], key=lambda item: float(item.get("started_at") or 0)):
+        pending_by_model[run["model_key"]] = run
     cards = []
     for key, m in MODELS.items():
         own = registered_model_name(tenant, key)
@@ -331,6 +338,12 @@ def list_models(tenant: str):
             "algorithm": None, "data_source": None, "published_at": None,
         })
         pending = pending_by_model.get(key)
+        if pending is not None and champ is not None:
+            try:
+                if int((pending.get("result") or {}).get("version")) <= int(champ["version"]):
+                    pending = None
+            except (KeyError, TypeError, ValueError):
+                pass
         run_summary = None if pending is None else {
             "run_id": pending["run_id"],
             "status": pending["status"],
@@ -343,6 +356,9 @@ def list_models(tenant: str):
             run_summary.update({
                 "publication_status": "ready_to_publish",
                 "status_label": "Ready to Publish",
+                "source": pending.get("source"),
+                "finished_at": pending.get("finished_at"),
+                "logs": pending.get("logs", []),
                 # Everything the Results page and subsequent /publish request need.
                 # Training backends already remove the in-memory model object and logs
                 # before exposing this result, so the catalogue stays JSON-safe.
@@ -515,6 +531,12 @@ def _line_win_predict_fields(tenant: str) -> list[dict]:
 @app.get("/api/{tenant}/models/{key}/predict-schema")
 def predict_schema(tenant: str, key: str):
     m = _model_or_404(key)
+    if key == "m2_inventory":
+        raise HTTPException(
+            404,
+            "m2_inventory uses /test-predict for DB input or /predict-schema-csv "
+            "for CSV test input",
+        )
     if key == "m1_quote_line_win":
         return {"model": key, "fields": _line_win_predict_fields(tenant)}
     fields = _enrich_options(m["fields"], _champion_categories(tenant, key))
@@ -624,6 +646,11 @@ def _line_win_prediction_records(tenant: str, records: list[dict], model) -> lis
 @app.post("/api/{tenant}/models/{key}/predict")
 def predict(tenant: str, key: str, payload: dict):
     m = _model_or_404(key)
+    if key == "m2_inventory":
+        raise HTTPException(
+            404,
+            "m2_inventory uses /test-predict for DB input or /predict-csv for CSV input",
+        )
     records = payload.get("records") or [payload]
 
     reg = MLflowRegistry()
@@ -1436,6 +1463,12 @@ def publish(tenant: str, key: str, payload: dict):
         )
         result["published_at"] = published_at
         get_training_backend().mark_published(tenant, key, str(version))
+        try:
+            get_training_result_store().mark_published(tenant, key, str(version))
+        except Exception:
+            result["result_store_warning"] = (
+                "Model published, but the durable training-result status could not be updated."
+            )
     return result
 
 
@@ -1443,7 +1476,7 @@ def publish(tenant: str, key: str, payload: dict):
 def inventory_dashboard(tenant: str):
     """Bulk-score current tenant inventory from PostgreSQL with the live champion."""
     try:
-        snapshots = read_db_prediction_snapshots(tenant, datetime.now(timezone.utc))
+        snapshots = read_db_prediction_snapshots(tenant, get_clock().as_of())
         if snapshots.empty:
             raise ValueError("the tenant database returned no inventory items")
         latest = (
@@ -1455,7 +1488,7 @@ def inventory_dashboard(tenant: str):
         risks, algorithm = inventory_csv._score_via_champion(
             tenant, inventory_csv._coerce_model_input(latest)
         )
-        model_source = "published MLflow champion"
+        model_source = "published champion (Data Lake artifact)"
     except Exception as exc:
         raise HTTPException(409, f"inventory dashboard is not ready: {exc}") from exc
 
@@ -1473,6 +1506,7 @@ def inventory_dashboard(tenant: str):
         reserved = number(row.reserved_qty)
         rows.append({
             "item_id": str(row.item_id),
+            "warehouse_id": str(row.warehouse_id),
             "item_name": str(getattr(row, "item_name", "") or row.item_id),
             "product": str(getattr(row, "item_name", "") or row.item_id),
             "part_number": str(getattr(row, "part_number", "") or ""),
@@ -1505,6 +1539,228 @@ def inventory_dashboard(tenant: str):
             "medium_risk_30d": sum(0.33 <= row["risk_30d"] < 0.66 for row in rows),
             "low_risk_30d": sum(row["risk_30d"] < 0.33 for row in rows),
         },
+    }
+
+
+_INVENTORY_TEST_OVERRIDES = {
+    "available_qty", "reserved_qty", "forecasted_qty", "rop",
+    "demand_forecast_qty", "past_due_qty", "open_qty", "lead_time_days",
+}
+_INVENTORY_TEST_REQUIRED = (
+    "available_qty", "reserved_qty", "rop", "demand_forecast_qty",
+)
+
+
+def _inventory_test_value(row: pd.Series, field: str):
+    value = row.get(field)
+    return None if pd.isna(value) else float(value)
+
+
+def _inventory_test_text(value, fallback: str = "") -> str:
+    return fallback if value is None or pd.isna(value) else str(value)
+
+
+def _inventory_selected_input(row: pd.Series) -> dict:
+    """Public, JSON-safe DB values used to populate the single-test form."""
+    return {
+        "item_id": str(row["item_id"]),
+        "warehouse_id": str(row["warehouse_id"]),
+        "item_name": _inventory_test_text(row.get("item_name"), str(row["item_id"])),
+        "part_number": _inventory_test_text(row.get("part_number")),
+        "warehouse": _inventory_test_text(
+            row.get("warehouse_name"), str(row["warehouse_id"])
+        ),
+        "snapshot_date": pd.Timestamp(row["snapshot_date"]).date().isoformat(),
+        **{
+            field: _inventory_test_value(row, field)
+            for field in sorted(_INVENTORY_TEST_OVERRIDES)
+        },
+    }
+
+
+@app.get("/api/{tenant}/models/m2_inventory/test-predict-schema")
+def inventory_test_predict_schema(
+    tenant: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=100),
+    search: str = Query("", max_length=100),
+    item_id: str | None = Query(None),
+    warehouse_id: str | None = Query(None),
+):
+    """Paginate DB items and optionally load one location's prediction inputs."""
+    try:
+        snapshots = read_db_prediction_snapshots(tenant, get_clock().as_of())
+    except Exception as exc:
+        raise HTTPException(409, f"inventory prediction data is not ready: {exc}") from exc
+
+    selected = None
+    requested_item = str(item_id or "").strip()
+    requested_warehouse = str(warehouse_id or "").strip()
+    if bool(requested_item) != bool(requested_warehouse):
+        raise HTTPException(400, "item_id and warehouse_id must be provided together")
+    if requested_item:
+        match = snapshots[
+            snapshots["item_id"].astype(str).eq(requested_item)
+            & snapshots["warehouse_id"].astype(str).eq(requested_warehouse)
+        ]
+        if match.empty:
+            raise HTTPException(404, "item and warehouse location were not found")
+        selected = _inventory_selected_input(match.iloc[0])
+
+    filtered = snapshots
+    needle = search.strip().casefold()
+    if needle and not filtered.empty:
+        matches = pd.Series(False, index=filtered.index)
+        for column in (
+            "item_id", "item_name", "part_number", "warehouse_id", "warehouse_name",
+        ):
+            if column in filtered:
+                matches |= filtered[column].astype("string").str.contains(
+                    needle, case=False, regex=False, na=False,
+                )
+        filtered = filtered.loc[matches]
+
+    total_items = int(len(filtered))
+    total_pages = math.ceil(total_items / page_size) if total_items else 0
+    start = (page - 1) * page_size
+    items = [
+        {
+            "item_id": str(row["item_id"]),
+            "warehouse_id": str(row["warehouse_id"]),
+            "item_name": _inventory_test_text(row.get("item_name"), str(row["item_id"])),
+            "part_number": _inventory_test_text(row.get("part_number")),
+            "warehouse": _inventory_test_text(
+                row.get("warehouse_name"), str(row["warehouse_id"])
+            ),
+        }
+        for _, row in filtered.iloc[start:start + page_size].iterrows()
+    ]
+    return {
+        "model": "m2_inventory",
+        "tenant": tenant,
+        "fields": [
+            {"name": "item_id", "type": "category", "required": True},
+            {"name": "warehouse_id", "type": "category", "required": True},
+            {"name": "snapshot_date", "type": "date", "read_only": True},
+            *[
+                {
+                    "name": field,
+                    "type": "number",
+                    "required": field in _INVENTORY_TEST_REQUIRED,
+                }
+                for field in sorted(_INVENTORY_TEST_OVERRIDES)
+            ],
+        ],
+        "items": items,
+        "selected": selected,
+        "search": search.strip(),
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total_items": total_items,
+            "total_pages": total_pages,
+            "has_previous": page > 1 and total_items > 0,
+            "has_next": page < total_pages,
+        },
+    }
+
+
+@app.post("/api/{tenant}/models/m2_inventory/test-predict")
+def inventory_test_predict(tenant: str, payload: dict):
+    """Score one current item/location, reading its hidden feature context from DB."""
+    record = payload.get("record", payload)
+    if not isinstance(record, dict):
+        raise HTTPException(400, "provide a JSON object in 'record'")
+    item_id = str(record.get("item_id") or "").strip()
+    warehouse_id = str(record.get("warehouse_id") or "").strip()
+    if not item_id or not warehouse_id:
+        raise HTTPException(400, "item_id and warehouse_id are required")
+
+    as_of = get_clock().as_of()
+    try:
+        snapshots = read_db_prediction_snapshots(tenant, as_of)
+        selected = snapshots[
+            snapshots["item_id"].astype(str).eq(item_id)
+            & snapshots["warehouse_id"].astype(str).eq(warehouse_id)
+        ].copy()
+        if selected.empty:
+            raise HTTPException(404, "item and warehouse location were not found")
+
+        overrides = record.get("overrides") or {}
+        if not isinstance(overrides, dict):
+            raise HTTPException(400, "overrides must be a JSON object")
+        # Also accept the editable fields at the top level for a simpler form payload.
+        overrides = {
+            field: record[field]
+            for field in _INVENTORY_TEST_OVERRIDES
+            if field in record
+        } | overrides
+        unknown = sorted(set(overrides) - _INVENTORY_TEST_OVERRIDES)
+        if unknown:
+            raise HTTPException(400, f"unsupported overrides: {unknown}")
+        for field, value in overrides.items():
+            try:
+                number = float(value)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(400, f"{field} must be numeric") from exc
+            if number < 0:
+                raise HTTPException(400, f"{field} must not be negative")
+            selected.loc[:, field] = number
+
+        predictions, algorithm = inventory_csv._score_via_champion(
+            tenant, inventory_csv._coerce_model_input(selected)
+        )
+        prediction = predictions.iloc[0]
+        source = selected.iloc[0]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(409, f"inventory prediction is not ready: {exc}") from exc
+
+    return {
+        "tenant": tenant,
+        "model": "m2_inventory",
+        "snapshot_date": pd.Timestamp(source["snapshot_date"]).date().isoformat(),
+        "algorithm": algorithm,
+        "model_source": "published champion (Data Lake artifact)",
+        "input": {
+            "item_id": item_id,
+            "warehouse_id": warehouse_id,
+            **{
+                field: _inventory_test_value(source, field)
+                for field in sorted(_INVENTORY_TEST_OVERRIDES)
+            },
+        },
+        "prediction": {
+            "item_id": str(prediction.get("item_id", item_id)),
+            "warehouse_id": str(prediction.get("warehouse_id", warehouse_id)),
+            "risk_30d": float(prediction["risk_30d"]),
+            "risk_60d": float(prediction["risk_60d"]),
+            "badge_30d": str(prediction["badge_30d"]),
+            "badge_60d": str(prediction["badge_60d"]),
+            "is_rule_based": bool(prediction["is_rule_based"]),
+            "suppressed": bool(prediction["suppressed"]),
+            "model_version": str(prediction["model_version"]),
+        },
+    }
+
+
+@app.post("/api/{tenant}/models/m2_inventory/batch-predict")
+def inventory_batch_predict(tenant: str):
+    """Score all current tenant inventory and persist each risk in PostgreSQL."""
+    as_of = get_clock().as_of()
+    try:
+        scored_items = inventory_batch.score(tenant)
+    except Exception as exc:
+        raise HTTPException(409, f"inventory batch prediction is not ready: {exc}") from exc
+    return {
+        "tenant": tenant,
+        "model": "m2_inventory",
+        "status": "completed",
+        "snapshot_date": pd.Timestamp(as_of).date().isoformat(),
+        "scored_items": scored_items,
+        "saved_to": "items.custom_elements.ai_stockout",
+        "dashboard_endpoint": f"/api/{tenant}/inventory-dashboard",
     }
 
 

@@ -523,7 +523,7 @@ def _score_via_champion(
     *,
     registry: MLflowRegistry | None = None,
 ) -> tuple[pd.DataFrame, str]:
-    """Score via the published MLflow champion.
+    """Score via the published alias, loading the model artifact from Data Lake.
 
     Used both as the dedicated MLflow scoring path and as the fallback when the
     latest CSV comparison run failed the quality floor — the floor already
@@ -559,7 +559,7 @@ def score_latest_csv_snapshots(
 ) -> pd.DataFrame:
     """Score the latest snapshot per item/warehouse using the selected model.
 
-    Falls back to the published MLflow champion when the latest comparison run
+    Falls back to the published champion when the latest comparison run
     failed the quality floor, instead of silently serving a candidate the
     publish gate would have refused."""
     builder = InventoryDatasetBuilder()

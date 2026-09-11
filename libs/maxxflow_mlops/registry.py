@@ -18,10 +18,14 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import mlflow
+from mlflow.exceptions import MlflowException
 from mlflow.tracking import MlflowClient
 
 from maxxflow_core.errors import RegistryRoutingError, get_logger
 from maxxflow_core.settings import get_settings
+from maxxflow_mlops.model_artifact_store import (LAKE_ARTIFACT_URI_TAG,
+                                                  ModelArtifactStore,
+                                                  load_lake_model)
 from maxxflow_mlops.naming import (GLOBAL_TENANT, global_model_name, parse_model_name,
                                    registered_model_name)
 
@@ -109,12 +113,10 @@ def _ensure_tenant_experiment(experiment_name: str, *, registered_name: str,
     storage under that tenant's own path.
 
     MLflow only lets you set ``artifact_location`` at creation time — it cannot be
-    changed on an experiment that already exists — so this only takes effect the
-    first time a (tenant, module) trains. Uses the ``mlflow-artifacts:/`` proxy
-    scheme (not a raw ``abfss://``/``wasbs://`` URI): the tracking server resolves
-    that path against its own ``--default-artifact-root`` and physically talks to
-    Azure Storage on the caller's behalf, so training/serving processes never need
-    Azure Storage credentials of their own — only the MLflow server does.
+    changed on an experiment that already exists. Model binaries no longer depend
+    on this location: ``log_and_register`` writes those directly to ``LAKE_URI``.
+    The experiment location remains useful for any non-model run artifacts logged
+    in the future and for installations created before direct persistence.
 
     Only applies against an actual HTTP(S) tracking server, i.e. one that can be
     running ``--serve-artifacts`` to resolve that scheme. The local/test fallback
@@ -192,15 +194,36 @@ class MLflowRegistry:
                 mlflow.log_metrics({k: float(v) for k, v in metrics.items()})
             if tags:
                 mlflow.set_tags(dict(tags))
-            mlflow.pyfunc.log_model(
-                artifact_path="model",
-                python_model=model,
+            # Package and upload directly to the tenant lake. Do not call
+            # mlflow.pyfunc.log_model(): an existing experiment may have an
+            # immutable artifact_location under /mnt/mlflow-artifacts, and that
+            # upload is exactly what made retraining and later prediction fail.
+            lake_uri = ModelArtifactStore().save_pyfunc(
+                name=name,
+                run_id=run.info.run_id,
+                model=model,
                 signature=signature,
                 input_example=input_example,
                 pip_requirements=_PYFUNC_PIP,
             )
-            model_uri = f"runs:/{run.info.run_id}/model"
-            mv = mlflow.register_model(model_uri=model_uri, name=name, tags=dict(tags))
+            mlflow.set_tag(LAKE_ARTIFACT_URI_TAG, lake_uri)
+            try:
+                self.client.get_registered_model(name)
+            except MlflowException:
+                try:
+                    self.client.create_registered_model(name, tags=dict(tags))
+                except MlflowException:
+                    # Another worker may have created the same registered model
+                    # between the exact lookup and create calls. Confirm it now;
+                    # any real registry failure still propagates.
+                    self.client.get_registered_model(name)
+            version_tags = {**dict(tags), LAKE_ARTIFACT_URI_TAG: lake_uri}
+            mv = self.client.create_model_version(
+                name=name,
+                source=lake_uri,
+                run_id=run.info.run_id,
+                tags=version_tags,
+            )
         return mv.version
 
     # --- alias ops (NO search, NO stages) ------------------------------------
@@ -235,8 +258,18 @@ class MLflowRegistry:
     # --- read path (load by name@alias ONLY) ---------------------------------
     def load_champion(self, *, name: str, alias: str | None = None) -> Any:
         alias = alias or get_settings().model_alias
-        uri = f"models:/{name}@{alias}"
-        return mlflow.pyfunc.load_model(uri)
+        version = self.client.get_model_version_by_alias(name=name, alias=alias)
+        lake_uri = dict(version.tags or {}).get(LAKE_ARTIFACT_URI_TAG)
+        if lake_uri:
+            return load_lake_model(lake_uri)
+
+        # Compatibility only for models published before direct Data Lake
+        # persistence existed. Retraining once creates the durable tag/path.
+        log.warning(
+            "%s@%s v%s has no %s tag; falling back to its legacy MLflow artifact",
+            name, alias, version.version, LAKE_ARTIFACT_URI_TAG,
+        )
+        return mlflow.pyfunc.load_model(f"models:/{name}@{alias}")
 
     def resolve_champion_name(self, *, tenant: str, module: str,
                               alias: str | None = None) -> tuple[str, bool] | None:

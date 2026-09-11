@@ -33,6 +33,7 @@ from m1_quote.frames import build_training_frame, write_option_graph  # noqa: F4
 from m2_inventory.csv_training import train_for_configurator as train_inventory_csv
 from m2_inventory.db_training import build_training_frame as build_inventory_db_frame
 from maxxflow_mlops.registry import MLflowRegistry
+from services.configurator.result_store import get_training_result_store
 
 _INVENTORY_ARTIFACTS = Path(__file__).resolve().parents[2] / "artifacts" / "m2_inventory"
 
@@ -152,10 +153,12 @@ def start(tenant: str, model_key: str, *, source: str = "csv", csv_path: str | N
                     "fallback_reason": job["fallback_reason"],
                 },
             )
-            job["status"] = "done"
             job["finished_at"] = time.time()
             logger.log("Training complete — candidate registered. Review results, then Publish.")
             logger.set_progress(100, "complete", "Training complete")
+            job["status"] = "done"
+            uri = get_training_result_store().save(status(run_id))
+            logger.log(f"Training result saved to tenant lake ({uri.split(':', 1)[0]} storage).")
         except Exception as e:
             job["error"] = f"{type(e).__name__}: {e}"
             job["status"] = "error"
@@ -184,6 +187,7 @@ def status(run_id: str) -> dict:
            },
            "elapsed_s": round(elapsed_until - job["started_at"], 1),
            "started_at": job["started_at"],
+           "finished_at": job.get("finished_at"),
            "progress": job["logger"].progress_snapshot()}
     if job["status"] == "done":
         r = dict(job["result"]); r.pop("_model", None); r.pop("logs", None)

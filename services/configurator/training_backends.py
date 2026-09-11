@@ -47,6 +47,7 @@ from typing import Protocol
 from maxxflow_core.errors import get_logger
 from maxxflow_core.settings import get_settings
 from maxxflow_mlops.naming import registered_model_name
+from services.configurator.result_store import get_training_result_store
 
 log = get_logger("configurator.training_backends")
 
@@ -190,6 +191,10 @@ class AzureMLBackend:
                 "MAXXFLOW_MLFLOW_URI": s.mlflow_tracking_uri,
                 "MLFLOW_TRACKING_URI": s.mlflow_tracking_uri,
                 "MODEL_ALIAS": s.model_alias,
+                # Model bytes are written directly to the tenant Data Lake before
+                # the MLflow version metadata is created. For ADLS, the declared
+                # job identity must have Storage Blob Data Contributor access.
+                "LAKE_URI": s.lake_uri,
                 "MAXXFLOW_DATA_SOURCE_NAME": resolved_source_name,
                 **({"MAXXFLOW_DATASET_ROW_COUNT": str(dataset_row_count)}
                    if dataset_row_count is not None else {}),
@@ -318,6 +323,8 @@ class AzureMLBackend:
             else:
                 out["result"] = result
                 meta["result_version"] = str(result["version"])
+                out["published"] = bool(meta.get("published", False))
+                get_training_result_store().save(out)
         elif status == "error":
             out["error"] = f"Azure ML job {run_id} finished as {job.status}"
             # The feed cannot explain a failure that happened BEFORE the job's
@@ -451,7 +458,8 @@ def _common(meta: dict, run_id: str) -> dict:
                 "row_count": meta.get("dataset_row_count"),
             },
             "elapsed_s": round(elapsed_until - meta["started_at"], 1),
-            "started_at": meta["started_at"]}
+            "started_at": meta["started_at"],
+            "finished_at": meta.get("finished_at")}
 
 
 def _studio_url(job) -> str | None:

@@ -23,6 +23,7 @@ from jwt import PyJWKClient
 from jwt.exceptions import InvalidTokenError
 
 from maxxflow_core.settings import get_settings
+from maxxflow_data.engine import get_data_access
 
 ACTIVE_USER = "USER_STATUS_ACTIVE"
 ACTIVE_MEMBERSHIP = "USER_TENANT_STATUS_ACTIVE"
@@ -40,6 +41,7 @@ _SENSITIVE_PATHS = (
     (re.compile(r"^/api/[^/]+/models/[^/]+/train/?$"), "POST", TRAIN_PERMISSION),
     (re.compile(r"^/api/[^/]+/models/[^/]+/publish/?$"), "POST", PUBLISH_PERMISSION),
     (re.compile(r"^/api/[^/]+/models/[^/]+/rollback/?$"), "POST", ROLLBACK_PERMISSION),
+    (re.compile(r"^/api/[^/]+/models/m2_inventory/batch-predict/?$"), "POST", TRAIN_PERMISSION),
     (re.compile(r"^/api/[^/]+/models(?:/[^/]+)?/?$"), "DELETE", DELETE_PERMISSION),
     (re.compile(r"^/api/train/[^/]+/?$"), "GET", TRAIN_PERMISSION),
 )
@@ -168,10 +170,10 @@ class AuthRepository:
     """Resolve identity, tenant membership and RBAC grants from PostgreSQL."""
 
     def __init__(self) -> None:
-        database_url = get_settings().data_db_url
-        if not database_url:
-            raise RuntimeError("DATA_DB_URL is required for Configurator authorization")
-        self.engine = sa.create_engine(database_url, pool_pre_ping=True)
+        # Authentication and tenant feature reads target the same PostgreSQL server.
+        # Reuse the process-wide DataAccess engine so one API replica owns one bounded
+        # pool rather than an auth pool plus a separate pool for every data-access call.
+        self.engine = get_data_access().engine
 
     @staticmethod
     def _identifier(claims: dict[str, Any]) -> str:
@@ -306,11 +308,30 @@ def _required_permission(request: Request) -> str | None:
 
 def authenticate_request(request: Request) -> AuthContext:
     """Authenticate one /api request and bind it to its requested tenant."""
-    claims = get_jwt_verifier().verify(_extract_token(request))
-    tenant_slug = request.headers.get("x-tenant-slug", "").strip()
+    settings = get_settings()
+    tenant_slug = (
+        request.headers.get("x-tenant-slug", "").strip()
+        or settings.local_tenant_slug.strip()
+    )
     if not tenant_slug:
         raise HTTPException(403, "x-tenant-slug is required")
-    context = get_auth_repository().authorize(claims, tenant_slug)
+
+    if settings.local_auth_bypass_enabled:
+        configured_tenant = settings.local_tenant_slug.strip()
+        if configured_tenant and tenant_slug != configured_tenant:
+            raise HTTPException(403, "Local tenant does not match x-tenant-slug")
+        context = AuthContext(
+            user_id="local-development-user",
+            email="local-development@localhost",
+            tenant_id="local-development-tenant",
+            tenant_slug=tenant_slug,
+            roles=frozenset({"maxxflow-admin"}),
+            permissions=frozenset({"*:*"}),
+            is_ci_admin=True,
+        )
+    else:
+        claims = get_jwt_verifier().verify(_extract_token(request))
+        context = get_auth_repository().authorize(claims, tenant_slug)
 
     path_match = _TENANT_PATH.match(request.url.path)
     if path_match:
