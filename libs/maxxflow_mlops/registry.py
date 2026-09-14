@@ -262,6 +262,14 @@ class MLflowRegistry:
         mv = self.client.get_model_version_by_alias(name=name, alias=alias)
         return dict(mv.tags or {})
 
+    def get_alias_run_metrics(self, *, name: str, alias: str) -> dict:
+        """Return metrics logged by the exact model version behind an alias."""
+        mv = self.client.get_model_version_by_alias(name=name, alias=alias)
+        if not mv.run_id:
+            return {}
+        run = self.client.get_run(mv.run_id)
+        return dict(run.data.metrics or {})
+
     def get_version_tags(self, *, name: str, version: str) -> dict:
         """Return tags for one exact registered version without registry search."""
         mv = self.client.get_model_version(name=name, version=str(version))

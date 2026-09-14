@@ -339,6 +339,7 @@ def _register_candidate(
         "imbalance_strategy": "smote_then_tomek",
         "split_strategy": "chronological_train_calibration_test",
         "quality_floor_passed": str(bool(metrics.get("quality_floor_passed", False))).lower(),
+        "accuracy": f"{metrics['accuracy']:.8f}",
         "auc": f"{metrics['weekly_auc']:.8f}",
         "brier": f"{metrics['weekly_brier']:.8f}",
         "ece": f"{metrics['weekly_ece']:.8f}",
@@ -412,9 +413,21 @@ def _champion_metrics(registry: MLflowRegistry, name: str) -> dict | None:
     except ValueError:
         return None
     tags = registry.get_alias_tags(name=name, alias="champion")
+    accuracy = tags.get("accuracy")
+    if accuracy is None:
+        # Versions registered before accuracy became an M2 version tag still
+        # have it in their exact MLflow run metrics. Preserve a numeric,
+        # truthful champion contract while those versions remain live.
+        try:
+            accuracy = registry.get_alias_run_metrics(
+                name=name, alias="champion"
+            ).get("accuracy")
+        except Exception:
+            accuracy = None
     return {
         "version": version,
         "algorithm": tags.get("algorithm", "unknown"),
+        "accuracy": float(accuracy if accuracy is not None else 0.0),
         "auc": float(tags.get("auc", 0.0)),
         "brier": float(tags.get("brier", 1.0)),
         "ece": float(tags.get("ece", 1.0)),
