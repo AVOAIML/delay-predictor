@@ -19,7 +19,15 @@ from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
+from sklearn.metrics import (
+    average_precision_score,
+    brier_score_loss,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -506,19 +514,31 @@ class BaseInventoryHazardModel(ABC):
         weekly_class = weekly >= 0.5
         positive_rate = float(y_week.mean())
         accuracy = float((weekly_class == y_week).mean())
+        average_precision = float(average_precision_score(y_week, weekly))
         base_rate_accuracy = float(max(positive_rate, 1.0 - positive_rate))
+        tn, fp, fn, tp = confusion_matrix(
+            y_week, weekly_class, labels=[0, 1]
+        ).ravel()
         metrics: dict[str, Any] = {
             "algorithm": self.algorithm_name,
             "calibration_method": str(self.calibrator.method),
             "test_rows": int(len(test)),
             "weekly_auc": float(roc_auc_score(y_week, weekly)),
-            "weekly_average_precision": float(average_precision_score(y_week, weekly)),
+            "weekly_average_precision": average_precision,
             "weekly_brier": float(brier_score_loss(y_week, weekly)),
             "weekly_ece": expected_calibration_error(y_week, weekly),
             "accuracy": accuracy,
+            "precision": float(precision_score(y_week, weekly_class, zero_division=0)),
+            "recall": float(recall_score(y_week, weekly_class, zero_division=0)),
+            "f1": float(f1_score(y_week, weekly_class, zero_division=0)),
+            "pr_auc": average_precision,
             "base_rate_accuracy": base_rate_accuracy,
             "accuracy_over_base_rate": accuracy - base_rate_accuracy,
             "positive_rate": positive_rate,
+            "confusion_tn": int(tn),
+            "confusion_fp": int(fp),
+            "confusion_fn": int(fn),
+            "confusion_tp": int(tp),
         }
         for stage, counts in self.training_distribution_.items():
             metrics[f"{stage}_negative_rows"] = counts.get(0, 0)

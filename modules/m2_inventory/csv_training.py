@@ -281,6 +281,10 @@ def train_for_configurator(
     return {
         "model_type": "Inventory hazard classification",
         "metrics": winner,
+        "confusion": {
+            key: int(winner[f"confusion_{key}"])
+            for key in ("tn", "fp", "fn", "tp")
+        },
         "features": list(FEATURE_COLUMNS),
         "dropped_features": list(EXCLUDED_LEAKAGE_COLUMNS),
         "source": source,
