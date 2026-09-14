@@ -91,6 +91,7 @@ _UPLOADS = Path(tempfile.gettempdir()) / "mxf_uploads"
 _UPLOADS.mkdir(exist_ok=True)
 _COLUMN_PREVIEW_PAGE_SIZE = 8
 _SAMPLE_PREVIEW_PAGE_SIZES = (5, 10, 50, 100)
+_INVENTORY_DASHBOARD_PAGE_SIZES = (10, 20, 50, 100, 200)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _INVENTORY_CSV = _REPO_ROOT / "dataset" / "M2data" / "all_verticals_full.csv"
 _INVENTORY_ARTIFACTS = _REPO_ROOT / "artifacts" / "m2_inventory"
@@ -1473,8 +1474,16 @@ def publish(tenant: str, key: str, payload: dict):
 
 
 @app.get("/api/{tenant}/inventory-dashboard")
-def inventory_dashboard(tenant: str):
-    """Bulk-score current tenant inventory from PostgreSQL with the live champion."""
+def inventory_dashboard(
+    tenant: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10),
+):
+    """Bulk-score current tenant inventory and return one risk-ranked page."""
+    if page_size not in _INVENTORY_DASHBOARD_PAGE_SIZES:
+        allowed = ", ".join(str(size) for size in _INVENTORY_DASHBOARD_PAGE_SIZES)
+        raise HTTPException(400, f"page_size must be one of: {allowed}")
+
     try:
         snapshots = read_db_prediction_snapshots(tenant, get_clock().as_of())
         if snapshots.empty:
@@ -1525,6 +1534,7 @@ def inventory_dashboard(tenant: str):
             "suppressed": bool(row.suppressed),
             "model_version": str(row.model_version),
         })
+    paged_rows, pagination = _preview_page(rows, page, page_size)
     return {
         "tenant": tenant,
         "snapshot_date": latest["snapshot_date"].max().date().isoformat(),
@@ -1532,7 +1542,11 @@ def inventory_dashboard(tenant: str):
         "selected_model": algorithm,
         "model_metrics": [],
         "selection_warning": None,
-        "rows": rows,
+        "rows": paged_rows,
+        "pagination": {
+            **pagination,
+            "allowed_page_sizes": list(_INVENTORY_DASHBOARD_PAGE_SIZES),
+        },
         "summary": {
             "products": len(rows),
             "high_risk_30d": sum(row["risk_30d"] >= 0.66 for row in rows),
