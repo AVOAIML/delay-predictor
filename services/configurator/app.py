@@ -11,6 +11,11 @@ Endpoints (public Configurator cards: Smart Quote Optimiser and Predictive Inven
   POST /api/{tenant}/models/{key}/train             start training (bg) -> run_id
   GET  /api/train/{run_id}                           live logs + result
   POST /api/{tenant}/models/{key}/publish           champion gate (only if it beats current)
+
+M3 (Production Delay) is not a model card — it trains nothing and has no
+champion — so it has its own pair of routes near the bottom of this file:
+  POST /api/{tenant}/models/m3_production_delay/batch-review  score+review+cache
+  GET  /api/{tenant}/delay-insights                           read the cached result
 """
 
 from __future__ import annotations
@@ -1951,6 +1956,127 @@ def inventory_predict_csv(tenant: str, payload: dict):
 # so every /api and /health route above is already claimed before the catch-all
 # below sees a request. Adding a new API route after this block would be
 # shadowed by it — put new routes above this line.
+# ---------------------------------------------------------------------------
+# M3 — Production Delay insights.
+#
+# Not a Configurator "model card": M3 trains nothing, registers nothing and has
+# no champion, so the generic /predict and /train routes do not apply to it and
+# it is deliberately absent from MODELS. Its shape is M2's batch-predict — read
+# the tenant, score, review, cache the result on each entity — which is why it
+# lives here as its own pair of routes instead.
+# ---------------------------------------------------------------------------
+
+M3_ADVISORY_KEY = "ai_delay_insight"
+
+
+@app.post("/api/{tenant}/models/m3_production_delay/batch-review")
+def delay_batch_review(tenant: str, payload: dict | None = None):
+    """Score every job's delay risk, review the explanation, cache it on the MO.
+
+    Body (all optional except ``threshold``)::
+
+        {"threshold": 1.0, "jobs": ["WH/MO/00142"], "dry_run": false}
+
+    ``threshold`` is required and has no default anywhere in M3: the composite
+    risk score is a weighted mean of raw ratios, so the cutoff that means
+    "delayed" is a tenant calibration decision, not something this service can
+    pick. Passing one that did not produce the scores is refused rather than
+    silently re-badging them.
+
+    ``dry_run`` builds every insight and returns it without writing — the way
+    to see what would land on the MOs before it does.
+    """
+    from m3_production_delay.review.pipeline import run as run_delay_review
+
+    payload = payload or {}
+    threshold = payload.get("threshold")
+    if threshold is None:
+        raise HTTPException(
+            422,
+            "threshold is required: there is no calibrated default delay cutoff, and the same "
+            "composite score means different things for different tenants",
+        )
+    try:
+        threshold = float(threshold)
+    except (TypeError, ValueError):
+        raise HTTPException(422, f"threshold must be a number, got {threshold!r}") from None
+    if not math.isfinite(threshold):
+        raise HTTPException(422, "threshold must be a finite number")
+
+    jobs = payload.get("jobs") or payload.get("job_references")
+    if jobs is not None and not isinstance(jobs, list):
+        raise HTTPException(422, "jobs must be a list of job references")
+    dry_run = bool(payload.get("dry_run", False))
+
+    try:
+        insights = run_delay_review(
+            tenant=tenant, threshold=threshold, job_references=jobs, dry_run=dry_run
+        )
+    except ValueError as exc:
+        # The threshold guard and the "this is not a scored job" guard both land
+        # here: caller errors, not server faults.
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(409, f"delay review is not ready: {exc}") from exc
+
+    by_status: dict[str, int] = {}
+    for insight in insights:
+        by_status[insight.status] = by_status.get(insight.status, 0) + 1
+
+    return {
+        "tenant": tenant,
+        "model": "m3_production_delay",
+        "status": "completed",
+        "dry_run": dry_run,
+        "threshold": threshold,
+        "reviewed_jobs": len(insights),
+        "by_status": by_status,
+        "saved_to": (
+            None if dry_run else f"manufacturing_orders.custom_elements.{M3_ADVISORY_KEY}"
+        ),
+        "insights": [insight.to_dict() for insight in insights],
+    }
+
+
+@app.get("/api/{tenant}/delay-insights")
+def delay_insights(tenant: str, job: str | None = Query(default=None)):
+    """Read back the cached insights — what the MO "AI Insights" panel renders.
+
+    This is a plain JSONB read, no model call and no LLM: exactly what the page
+    does, which is the point of writing the advisory back in the first place.
+    ``?job=WH/MO/00142`` narrows it to one manufacturing order.
+    """
+    from maxxflow_data.engine import get_data_access
+
+    sql = (
+        "SELECT reference, custom_elements -> :key AS insight "
+        "FROM manufacturing_orders "
+        "WHERE deleted_at IS NULL AND custom_elements ? :key"
+    )
+    params: dict = {"key": M3_ADVISORY_KEY}
+    if job:
+        sql += " AND reference = :reference"
+        params["reference"] = job
+    sql += " ORDER BY reference"
+
+    try:
+        frame = get_data_access().query(sql, params, tenant=tenant)
+    except Exception as exc:
+        raise HTTPException(409, f"cannot read delay insights: {exc}") from exc
+
+    rows = [
+        {"job_id": record["reference"], "insight": record["insight"]}
+        for record in frame.to_dict(orient="records")
+    ]
+    if job and not rows:
+        raise HTTPException(
+            404,
+            f"no cached delay insight for {job!r} — run POST "
+            f"/api/{tenant}/models/m3_production_delay/batch-review first",
+        )
+    return {"tenant": tenant, "count": len(rows), "insights": rows}
+
+
 _DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
 if _DIST.is_dir():

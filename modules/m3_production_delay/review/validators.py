@@ -73,7 +73,15 @@ QUOTE_ABSOLUTE_FLOOR = 0.05
 #: Statuses that mean no work has started. An operation in one of these that
 #: the engine nevertheless scored as delayed is worth flagging: the composite
 #: got there on operator, material and supplier history alone.
-NOT_STARTED_STATUSES: frozenset[str] = frozenset({"NOT_STARTED", "TO_DO"})
+#:
+#: ``PENDING`` and ``READY`` are the codes the platform's own
+#: ``WORK_ORDER_STATUS`` master data actually uses (see
+#: ``maxxflow_core.masterdata.CATEGORIES``); ``NOT_STARTED`` / ``TO_DO`` are
+#: kept because a tenant's seeded master data is theirs to define and both
+#: spellings appear in fixtures.
+NOT_STARTED_STATUSES: frozenset[str] = frozenset(
+    {"PENDING", "READY", "NOT_STARTED", "TO_DO"}
+)
 
 #: Ratio of logged to planned time beyond which the two are more likely to be
 #: in different units than genuinely that far apart. 20x is far past anything

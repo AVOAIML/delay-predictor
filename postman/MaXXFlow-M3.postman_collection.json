@@ -1,0 +1,463 @@
+{
+  "info": {
+    "name": "MaXXFlow \u2014 M3 Production Delay",
+    "description": "End-to-end checks for M3 (Production Delay Predictor) against the local stack.\n\nRun the requests in order: the write request is what puts `ai_delay_insight` on each manufacturing order, and the read requests verify it landed.\n\nPrerequisites:\n  docker compose -f compose.local.yml up -d --wait postgres minio minio-init mlflow configurator-api\n  uv run python -m maxxflow_cli db-provision --tenant demo\n  uv run python scripts/seed_m3_demo.py --tenant demo\n\nThe seeded demo tenant has four jobs, one per outcome the review pipeline can produce:\n  WH/MO/00142  overrunning + short material + late vendor -> four explanation lines\n  WH/MO/00143  everything on schedule                     -> approved, no lines\n  WH/MO/00144  nothing logged yet                         -> suppressed_not_scorable\n  WH/MO/00145  a component with zero stock                -> infinity coerced and flagged",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "tenant",
+      "value": "demo"
+    },
+    {
+      "key": "threshold",
+      "value": "1.0"
+    },
+    {
+      "key": "job",
+      "value": "WH/MO/00142"
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Health",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "health"
+          ]
+        },
+        "description": "Is the Configurator API up at all? Everything below assumes this returns ok."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('API is up', () => pm.response.to.have.status(200));",
+              "pm.test('reports ok', () => pm.expect(pm.response.json().status).to.eql('ok'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Review all jobs \u2014 DRY RUN (writes nothing)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"threshold\": {{threshold}},\n  \"dry_run\": true\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/{{tenant}}/models/m3_production_delay/batch-review",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "{{tenant}}",
+            "models",
+            "m3_production_delay",
+            "batch-review"
+          ]
+        },
+        "description": "Runs the whole chain \u2014 DAL read, rollup, Weight Agent, Risk Engine, Review Agent \u2014 and returns every insight WITHOUT touching the database. This is the one to run first: it shows exactly what would be written.\n\nWith LLM_PROVIDER=stub (the default) every job with lines comes back as `fallback_template`, because the stub returns prose the judge cannot parse. That is the designed degraded path, not a failure."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "pm.test('completed', () => pm.response.to.have.status(200));",
+              "pm.test('nothing was written', () => pm.expect(body.saved_to).to.eql(null));",
+              "pm.test('reviewed every seeded job', () => pm.expect(body.reviewed_jobs).to.be.at.least(4));",
+              "",
+              "const byJob = Object.fromEntries(body.insights.map(i => [i.job_id, i]));",
+              "",
+              "pm.test('WH/MO/00142 explains itself with four lines', () => {",
+              "  const insight = byJob['WH/MO/00142'];",
+              "  pm.expect(insight.is_delayed).to.eql(true);",
+              "  pm.expect(insight.why_lines).to.have.lengthOf(4);",
+              "  pm.expect(insight.summary_basis).to.eql('worst_operation');",
+              "});",
+              "",
+              "pm.test('every number in every line is traceable to the evidence', () => {",
+              "  body.insights.flatMap(i => i.why_lines).forEach(line => {",
+              "    pm.expect(Object.keys(line.quoted).length, line.detail).to.be.above(0);",
+              "  });",
+              "});",
+              "",
+              "pm.test('WH/MO/00143 is approved with nothing to explain', () => {",
+              "  const insight = byJob['WH/MO/00143'];",
+              "  pm.expect(insight.is_delayed).to.eql(false);",
+              "  pm.expect(insight.why_lines).to.have.lengthOf(0);",
+              "});",
+              "",
+              "pm.test('WH/MO/00144 is suppressed \u2014 nothing has been logged', () => {",
+              "  pm.expect(byJob['WH/MO/00144'].status).to.eql('suppressed_not_scorable');",
+              "});",
+              "",
+              "pm.test('WH/MO/00145 coerces the zero-stock infinity and says so', () => {",
+              "  const insight = byJob['WH/MO/00145'];",
+              "  pm.expect(insight.risk_score).to.eql(null);",
+              "  pm.expect(insight.issues.some(i => i.check === 'non_finite')).to.eql(true);",
+              "  pm.expect(insight.material_overrun[0].shortfall_quantity).to.eql(150);",
+              "});",
+              "",
+              "pm.test('no Infinity or NaN survives into the payload', () => {",
+              "  pm.expect(pm.response.text()).to.not.include('Infinity');",
+              "  pm.expect(pm.response.text()).to.not.include('NaN');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Review all jobs \u2014 WRITE to customElements",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"threshold\": {{threshold}}\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/{{tenant}}/models/m3_production_delay/batch-review",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "{{tenant}}",
+            "models",
+            "m3_production_delay",
+            "batch-review"
+          ]
+        },
+        "description": "Same run, but it merges each insight into `manufacturing_orders.custom_elements` under the key `ai_delay_insight`. Section 1's per-operation `ai_delay` key is left untouched, and the three unvalidated statuses each get an `audit_logs` row."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "pm.test('completed', () => pm.response.to.have.status(200));",
+              "pm.test('wrote to the manufacturing order', () =>",
+              "  pm.expect(body.saved_to).to.eql('manufacturing_orders.custom_elements.ai_delay_insight'));",
+              "pm.test('every job got a status', () =>",
+              "  pm.expect(Object.values(body.by_status).reduce((a, b) => a + b, 0)).to.eql(body.reviewed_jobs));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Read the cached insights (what the MO panel renders)",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/{{tenant}}/delay-insights",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "{{tenant}}",
+            "delay-insights"
+          ]
+        },
+        "description": "A plain JSONB read \u2014 no model call, no LLM. This is exactly what the MO page does, which is the whole point of writing the advisory back instead of scoring on page load."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "pm.test('reads back', () => pm.response.to.have.status(200));",
+              "pm.test('the write in step 2 is visible here', () => pm.expect(body.count).to.be.at.least(4));",
+              "pm.test('each cached insight carries its own threshold and version', () => {",
+              "  body.insights.forEach(row => {",
+              "    pm.expect(row.insight.model_version).to.eql('m3-review-v1');",
+              "    pm.expect(row.insight.delay_threshold).to.eql(Number(pm.variables.get('threshold')));",
+              "    pm.expect(row.insight.scored_at).to.be.a('string');",
+              "  });",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Read one job's insight",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/{{tenant}}/delay-insights?job={{job}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "{{tenant}}",
+            "delay-insights"
+          ],
+          "query": [
+            {
+              "key": "job",
+              "value": "{{job}}"
+            }
+          ]
+        },
+        "description": "A job reference contains slashes (WH/MO/00142), so it is a query parameter rather than a path segment."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "pm.test('found', () => pm.response.to.have.status(200));",
+              "pm.test('exactly one job', () => pm.expect(body.count).to.eql(1));",
+              "",
+              "const insight = body.insights[0].insight;",
+              "pm.test('the four user-story lines are there', () => {",
+              "  const headlines = insight.why_lines.map(l => l.headline);",
+              "  pm.expect(headlines).to.include('Actual time logged has exceeded expected duration');",
+              "  pm.expect(headlines).to.include('Assigned operator has a history of overrunning');",
+              "  pm.expect(headlines).to.include('Required material is short in the warehouse');",
+              "  pm.expect(headlines).to.include('Supplier for a short component has a late-delivery history');",
+              "});",
+              "",
+              "pm.test('lines are ordered by contribution', () => {",
+              "  const shares = insight.why_lines.map(l => l.contribution);",
+              "  pm.expect(shares).to.eql([...shares].sort((a, b) => b - a));",
+              "});",
+              "",
+              "pm.test('the material shortage is listed once, not once per operation', () =>",
+              "  pm.expect(insight.material_overrun).to.have.lengthOf(1));",
+              "",
+              "pm.test('a not-started operation scored delayed is flagged', () =>",
+              "  pm.expect(insight.issues.some(i => i.check === 'not_started_but_delayed')).to.eql(true));",
+              "",
+              "pm.test('the cascading predecessor is context, never a cause', () => {",
+              "  pm.expect(insight.issues.some(i => i.check === 'cascading_predecessor')).to.eql(true);",
+              "  pm.expect(insight.why_lines.every(l => l.signal_key !== 'predecessor_time_overrun_ratio')).to.eql(true);",
+              "});",
+              "",
+              "pm.test('operator identities never leave the DAL', () =>",
+              "  pm.expect(pm.response.text()).to.not.include('operator_id'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Review a single job only",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"threshold\": {{threshold}},\n  \"jobs\": [\"{{job}}\"],\n  \"dry_run\": true\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/{{tenant}}/models/m3_production_delay/batch-review",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "{{tenant}}",
+            "models",
+            "m3_production_delay",
+            "batch-review"
+          ]
+        },
+        "description": "Scopes the run to named job references. Worth using once a real LLM is wired: each job with lines costs up to two judging calls."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "pm.test('only the named job ran', () => {",
+              "  pm.expect(body.reviewed_jobs).to.eql(1);",
+              "  pm.expect(body.insights[0].job_id).to.eql(pm.variables.get('job'));",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Missing threshold is refused (422)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"dry_run\": true\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/{{tenant}}/models/m3_production_delay/batch-review",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "{{tenant}}",
+            "models",
+            "m3_production_delay",
+            "batch-review"
+          ]
+        },
+        "description": "There is no calibrated default delay cutoff anywhere in M3, and guessing one would put a badge on every job for a reason nobody chose. So the request is refused rather than defaulted."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('refused', () => pm.response.to.have.status(422));",
+              "pm.test('says why', () =>",
+              "  pm.expect(pm.response.json().detail).to.include('no calibrated default'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. A higher threshold re-scores (badges flip, lines stay)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"threshold\": 2.0,\n  \"dry_run\": true\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/{{tenant}}/models/m3_production_delay/batch-review",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "{{tenant}}",
+            "models",
+            "m3_production_delay",
+            "batch-review"
+          ]
+        },
+        "description": "The threshold is used for SCORING as well as for the badge, so this endpoint is always self-consistent: raising it to 2.0 re-scores every job at that cutoff.\n\nWatch what changes and what does not. WH/MO/00142 stops being flagged (1.38 is below 2.0) but keeps all four explanation lines \u2014 a signal that fired is still fired, whatever cutoff the badge uses. The lines explain the signals; the threshold only decides the badge.\n\n(Handing an already-scored job to review_job() at a different threshold is a different matter and is refused \u2014 see the orchestrator tests. That cannot happen here, because this route scores and reviews in one pass.)"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "pm.test('re-scored at the new cutoff', () => {",
+              "  pm.response.to.have.status(200);",
+              "  pm.expect(body.threshold).to.eql(2.0);",
+              "});",
+              "",
+              "const job = body.insights.find(i => i.job_id === 'WH/MO/00142');",
+              "pm.test('the badge follows the threshold', () => {",
+              "  pm.expect(job.risk_score).to.be.below(2.0);",
+              "  pm.expect(job.is_delayed).to.eql(false);",
+              "});",
+              "",
+              "pm.test('but the explanation does not \u2014 a fired signal is still fired', () =>",
+              "  pm.expect(job.why_lines).to.have.lengthOf(4));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Unknown job returns 404",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/{{tenant}}/delay-insights?job=WH/MO/99999",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "{{tenant}}",
+            "delay-insights"
+          ],
+          "query": [
+            {
+              "key": "job",
+              "value": "WH/MO/99999"
+            }
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('not found', () => pm.response.to.have.status(404));",
+              "pm.test('points at the endpoint that would create it', () =>",
+              "  pm.expect(pm.response.json().detail).to.include('batch-review'));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
