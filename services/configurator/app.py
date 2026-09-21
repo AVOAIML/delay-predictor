@@ -2039,7 +2039,7 @@ def delay_batch_review(tenant: str, payload: dict | None = None):
 
 
 @app.get("/api/{tenant}/delay-insights")
-def delay_insights(tenant: str, job: str | None = Query(default=None)):
+def delay_insights(request: Request, tenant: str, job: str | None = Query(default=None)):
     """Read back the cached insights — what the MO "AI Insights" panel renders.
 
     This is a plain JSONB read, no model call and no LLM: exactly what the page
@@ -2047,6 +2047,15 @@ def delay_insights(tenant: str, job: str | None = Query(default=None)):
     ``?job=WH/MO/00142`` narrows it to one manufacturing order.
     """
     from maxxflow_data.engine import get_data_access
+
+    # Belt and braces. `security._TENANT_PATH` already refuses a path tenant
+    # that differs from the authenticated one, but that guard is a regex
+    # enumerating path prefixes: a future rename of this route would silently
+    # fall out of it and turn this into a cross-tenant read. The query below
+    # runs against the PATH tenant, so the route re-checks it itself.
+    auth: AuthContext = request.state.auth
+    if tenant != auth.tenant_slug:
+        raise HTTPException(403, "Path tenant does not match x-tenant-slug")
 
     sql = (
         "SELECT reference, custom_elements -> :key AS insight "
