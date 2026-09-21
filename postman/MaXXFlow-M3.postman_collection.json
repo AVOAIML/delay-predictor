@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "MaXXFlow \u2014 M3 Production Delay",
-    "description": "End-to-end checks for M3 (Production Delay Predictor) against the local stack.\n\nRun the requests in order: the write request is what puts `ai_delay_insight` on each manufacturing order, and the read requests verify it landed.\n\nPrerequisites:\n  docker compose -f compose.local.yml up -d --wait postgres minio minio-init mlflow configurator-api\n  uv run python -m maxxflow_cli db-provision --tenant demo\n  uv run python scripts/seed_m3_demo.py --tenant demo\n\nThe seeded demo tenant has four jobs, one per outcome the review pipeline can produce:\n  WH/MO/00142  overrunning + short material + late vendor -> four explanation lines\n  WH/MO/00143  everything on schedule                     -> approved, no lines\n  WH/MO/00144  nothing logged yet                         -> suppressed_not_scorable\n  WH/MO/00145  a component with zero stock                -> infinity coerced and flagged",
+    "description": "End-to-end checks for M3 (Production Delay Predictor) against the local stack.\n\nRun the requests in order: the write request is what puts `ai_delay_insight` on each manufacturing order, and the read requests verify it landed.\n\nPrerequisites:\n  docker compose -f compose.local.yml up -d --wait postgres minio minio-init mlflow configurator-api\n  uv run python -m maxxflow_cli db-provision --tenant demo\n  uv run python scripts/seed_m3_demo.py --tenant demo\n\nThe seeded demo tenant has four jobs, one per outcome the review pipeline can produce:\n  WH/MO/00142  overrunning + short material + late vendor -> four explanation lines\n  WH/MO/00143  everything on schedule                     -> approved, no lines\n  WH/MO/00144  nothing logged yet                         -> suppressed_not_scorable\n  WH/MO/00145  a component with zero stock                -> infinity coerced and flagged\n\nAUTH \u2014 every /api/* route is authenticated. Two things are required:\n  Authorization: Bearer {{token}}   (set at collection level, inherited by each request)\n  x-tenant-slug: {{tenant}}          (must match the tenant in the URL)\n\nMint a token with:\n  uv run python scripts/dev_auth.py --tenant demo --token-only\nthen paste it into the collection's `token` variable. It lasts 12 hours.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -20,6 +20,11 @@
     {
       "key": "job",
       "value": "WH/MO/00142"
+    },
+    {
+      "key": "token",
+      "value": "PASTE-TOKEN-HERE",
+      "description": "From: uv run python scripts/dev_auth.py --tenant demo --token-only"
     }
   ],
   "item": [
@@ -36,7 +41,11 @@
             "health"
           ]
         },
-        "description": "Is the Configurator API up at all? Everything below assumes this returns ok."
+        "description": "Is the Configurator API up at all? Everything below assumes this returns ok.",
+        "header": [],
+        "auth": {
+          "type": "noauth"
+        }
       },
       "event": [
         {
@@ -59,6 +68,11 @@
           {
             "key": "Content-Type",
             "value": "application/json"
+          },
+          {
+            "key": "x-tenant-slug",
+            "value": "{{tenant}}",
+            "description": "Required by the API's auth middleware; must match the tenant in the URL."
           }
         ],
         "body": {
@@ -140,6 +154,11 @@
           {
             "key": "Content-Type",
             "value": "application/json"
+          },
+          {
+            "key": "x-tenant-slug",
+            "value": "{{tenant}}",
+            "description": "Required by the API's auth middleware; must match the tenant in the URL."
           }
         ],
         "body": {
@@ -193,7 +212,14 @@
             "delay-insights"
           ]
         },
-        "description": "A plain JSONB read \u2014 no model call, no LLM. This is exactly what the MO page does, which is the whole point of writing the advisory back instead of scoring on page load."
+        "description": "A plain JSONB read \u2014 no model call, no LLM. This is exactly what the MO page does, which is the whole point of writing the advisory back instead of scoring on page load.",
+        "header": [
+          {
+            "key": "x-tenant-slug",
+            "value": "{{tenant}}",
+            "description": "Required by the API's auth middleware; must match the tenant in the URL."
+          }
+        ]
       },
       "event": [
         {
@@ -237,7 +263,14 @@
             }
           ]
         },
-        "description": "A job reference contains slashes (WH/MO/00142), so it is a query parameter rather than a path segment."
+        "description": "A job reference contains slashes (WH/MO/00142), so it is a query parameter rather than a path segment.",
+        "header": [
+          {
+            "key": "x-tenant-slug",
+            "value": "{{tenant}}",
+            "description": "Required by the API's auth middleware; must match the tenant in the URL."
+          }
+        ]
       },
       "event": [
         {
@@ -289,6 +322,11 @@
           {
             "key": "Content-Type",
             "value": "application/json"
+          },
+          {
+            "key": "x-tenant-slug",
+            "value": "{{tenant}}",
+            "description": "Required by the API's auth middleware; must match the tenant in the URL."
           }
         ],
         "body": {
@@ -334,6 +372,11 @@
           {
             "key": "Content-Type",
             "value": "application/json"
+          },
+          {
+            "key": "x-tenant-slug",
+            "value": "{{tenant}}",
+            "description": "Required by the API's auth middleware; must match the tenant in the URL."
           }
         ],
         "body": {
@@ -377,6 +420,11 @@
           {
             "key": "Content-Type",
             "value": "application/json"
+          },
+          {
+            "key": "x-tenant-slug",
+            "value": "{{tenant}}",
+            "description": "Required by the API's auth middleware; must match the tenant in the URL."
           }
         ],
         "body": {
@@ -443,7 +491,14 @@
               "value": "WH/MO/99999"
             }
           ]
-        }
+        },
+        "header": [
+          {
+            "key": "x-tenant-slug",
+            "value": "{{tenant}}",
+            "description": "Required by the API's auth middleware; must match the tenant in the URL."
+          }
+        ]
       },
       "event": [
         {
@@ -459,5 +514,15 @@
         }
       ]
     }
-  ]
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  }
 }
