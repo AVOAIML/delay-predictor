@@ -56,3 +56,6 @@ modules/m5_scheduling
 
 frontend
 CLAUDE.md
+
+# Carries a real bearer token (scripts/dev_auth.py --postman-env).
+postman/MaXXFlow-Local.postman_environment.json

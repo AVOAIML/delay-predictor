@@ -32,8 +32,10 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import os
 import uuid
+from pathlib import Path
 
 import jwt
 import sqlalchemy as sa
@@ -185,6 +187,39 @@ def mint_token(email: str, secret: str, hours: int) -> str:
     )
 
 
+#: Where `--postman-env` writes by default. Importing this into Postman is the
+#: reliable way to get a token in: copying one by hand tends to carry a
+#: trailing newline, and Postman refuses any header containing a control
+#: character with "Invalid character in header content".
+POSTMAN_ENV_PATH = (
+    Path(__file__).resolve().parents[1] / "postman" / "MaXXFlow-Local.postman_environment.json"
+)
+
+
+def write_postman_env(path: Path, tenant: str, token: str, threshold: str = "1.0") -> Path:
+    """Write a Postman environment carrying the token, ready to import.
+
+    Values go in both `value` and the enabled flag Postman needs; the token is
+    typed `secret` so it is masked in the UI rather than sitting in plain view
+    in a shared screen.
+    """
+    environment = {
+        "id": "maxxflow-m3-local",
+        "name": "MaXXFlow M3 — local",
+        "values": [
+            {"key": "baseUrl", "value": "http://localhost:8000", "type": "default", "enabled": True},
+            {"key": "tenant", "value": tenant, "type": "default", "enabled": True},
+            {"key": "threshold", "value": threshold, "type": "default", "enabled": True},
+            {"key": "job", "value": "WH/MO/00142", "type": "default", "enabled": True},
+            {"key": "token", "value": token, "type": "secret", "enabled": True},
+        ],
+        "_postman_variable_scope": "environment",
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(environment, indent=2) + chr(10), encoding="utf-8")
+    return path
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="dev_auth",
@@ -201,10 +236,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--token-only", action="store_true", help="print just the token, nothing else"
     )
+    parser.add_argument(
+        "--postman-env",
+        nargs="?",
+        const=str(POSTMAN_ENV_PATH),
+        default=None,
+        help="write a Postman environment file carrying the token (default: postman/)",
+    )
     args = parser.parse_args(argv)
 
     bootstrap(args.tenant, args.email)
     token = mint_token(args.email, args.secret, args.hours)
+
+    if args.postman_env:
+        written = write_postman_env(Path(args.postman_env), args.tenant, token)
+        print(f"Postman environment written: {written}")
+        print("Import it in Postman, then pick it in the environment selector (top right).")
+        if args.token_only:
+            return 0
 
     if args.token_only:
         print(token)
