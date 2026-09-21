@@ -1,0 +1,226 @@
+{
+  "job_id": "WH/MO/00142",
+  "operations": [
+    {
+      "operation_id": "wo-cutting-0001",
+      "operation_type": "INDEPENDENT",
+      "status": "IN_PROGRESS",
+      "depends_on_operation_ids": [],
+      "expected_duration_minutes": 480,
+      "actual_duration_minutes": 600,
+      "job_quantity": 100.0,
+      "current_done_quantity": 60.0,
+      "operator_count": 1,
+      "operators": [
+        {
+          "operator_id": "hmac-operator-a",
+          "name": null,
+          "last_10_work_orders": [
+            {
+              "work_order_id": "wo-hist-1",
+              "elapsed_time_minutes": 500,
+              "scheduled_time_minutes": 400,
+              "completed_on": "2026-09-02 00:00:00",
+              "operation_type": "INDEPENDENT"
+            }
+          ]
+        }
+      ],
+      "components": [
+        {
+          "component_id": "item-steel-plate",
+          "name": "Steel Plate 12mm",
+          "required_quantity": 100.0,
+          "available_quantity": 40.0,
+          "vendor": {
+            "vendor_id": "ven-steel",
+            "name": "Lanka Steel",
+            "last_10_purchase_orders": [
+              {
+                "po_number": "PO-8801",
+                "po_order_date": "2026-08-01 00:00:00",
+                "po_order_deadline": "2026-08-15 00:00:00",
+                "grn_received_date": "2026-08-22 00:00:00"
+              }
+            ],
+            "vendor_lead_time_ratio": 1.5
+          }
+        },
+        {
+          "component_id": "item-bolt-m8",
+          "name": "Bolt M8",
+          "required_quantity": 500.0,
+          "available_quantity": 500.0,
+          "vendor": {
+            "vendor_id": "ven-fast",
+            "name": "Colombo Fasteners",
+            "last_10_purchase_orders": [
+              {
+                "po_number": "PO-8802",
+                "po_order_date": "2026-08-01 00:00:00",
+                "po_order_deadline": "2026-08-15 00:00:00",
+                "grn_received_date": "2026-08-12 00:00:00"
+              }
+            ],
+            "vendor_lead_time_ratio": 0.7857142857142857
+          }
+        }
+      ],
+      "time_overrun_ratio": 1.25,
+      "predicted_overrun_hours": 8.666666666666666,
+      "predecessor_time_overrun_ratio": null,
+      "operator_pace_ratio": 1.25,
+      "material_shortfall_ratio": 2.5,
+      "composite_risk_score": 1.4523809523809523,
+      "is_delayed": true
+    },
+    {
+      "operation_id": "wo-welding-0002",
+      "operation_type": "INDEPENDENT",
+      "status": "IN_PROGRESS",
+      "depends_on_operation_ids": [],
+      "expected_duration_minutes": 300,
+      "actual_duration_minutes": 90,
+      "job_quantity": 100.0,
+      "current_done_quantity": 35.0,
+      "operator_count": 1,
+      "operators": [
+        {
+          "operator_id": "hmac-operator-b",
+          "name": null,
+          "last_10_work_orders": [
+            {
+              "work_order_id": "wo-hist-1",
+              "elapsed_time_minutes": 380,
+              "scheduled_time_minutes": 400,
+              "completed_on": "2026-09-02 00:00:00",
+              "operation_type": "INDEPENDENT"
+            }
+          ]
+        }
+      ],
+      "components": [
+        {
+          "component_id": "item-steel-plate",
+          "name": "Steel Plate 12mm",
+          "required_quantity": 100.0,
+          "available_quantity": 40.0,
+          "vendor": {
+            "vendor_id": "ven-steel",
+            "name": "Lanka Steel",
+            "last_10_purchase_orders": [
+              {
+                "po_number": "PO-8801",
+                "po_order_date": "2026-08-01 00:00:00",
+                "po_order_deadline": "2026-08-15 00:00:00",
+                "grn_received_date": "2026-08-22 00:00:00"
+              }
+            ],
+            "vendor_lead_time_ratio": 1.5
+          }
+        },
+        {
+          "component_id": "item-bolt-m8",
+          "name": "Bolt M8",
+          "required_quantity": 500.0,
+          "available_quantity": 500.0,
+          "vendor": {
+            "vendor_id": "ven-fast",
+            "name": "Colombo Fasteners",
+            "last_10_purchase_orders": [
+              {
+                "po_number": "PO-8802",
+                "po_order_date": "2026-08-01 00:00:00",
+                "po_order_deadline": "2026-08-15 00:00:00",
+                "grn_received_date": "2026-08-12 00:00:00"
+              }
+            ],
+            "vendor_lead_time_ratio": 0.7857142857142857
+          }
+        }
+      ],
+      "time_overrun_ratio": 0.3,
+      "predicted_overrun_hours": -0.7142857142857139,
+      "predecessor_time_overrun_ratio": null,
+      "operator_pace_ratio": 0.95,
+      "material_shortfall_ratio": 2.5,
+      "composite_risk_score": 0.9301587301587302,
+      "is_delayed": false
+    },
+    {
+      "operation_id": "wo-assembly-0003",
+      "operation_type": "DEPENDENT",
+      "status": "NOT_STARTED",
+      "depends_on_operation_ids": [
+        "wo-cutting-0001"
+      ],
+      "expected_duration_minutes": 240,
+      "actual_duration_minutes": null,
+      "job_quantity": 100.0,
+      "current_done_quantity": 0.0,
+      "operator_count": 1,
+      "operators": [
+        {
+          "operator_id": "hmac-operator-a",
+          "name": null,
+          "last_10_work_orders": [
+            {
+              "work_order_id": "wo-hist-1",
+              "elapsed_time_minutes": 500,
+              "scheduled_time_minutes": 400,
+              "completed_on": "2026-09-02 00:00:00",
+              "operation_type": "INDEPENDENT"
+            }
+          ]
+        }
+      ],
+      "components": [
+        {
+          "component_id": "item-steel-plate",
+          "name": "Steel Plate 12mm",
+          "required_quantity": 100.0,
+          "available_quantity": 40.0,
+          "vendor": {
+            "vendor_id": "ven-steel",
+            "name": "Lanka Steel",
+            "last_10_purchase_orders": [
+              {
+                "po_number": "PO-8801",
+                "po_order_date": "2026-08-01 00:00:00",
+                "po_order_deadline": "2026-08-15 00:00:00",
+                "grn_received_date": "2026-08-22 00:00:00"
+              }
+            ],
+            "vendor_lead_time_ratio": 1.5
+          }
+        },
+        {
+          "component_id": "item-bolt-m8",
+          "name": "Bolt M8",
+          "required_quantity": 500.0,
+          "available_quantity": 500.0,
+          "vendor": {
+            "vendor_id": "ven-fast",
+            "name": "Colombo Fasteners",
+            "last_10_purchase_orders": [
+              {
+                "po_number": "PO-8802",
+                "po_order_date": "2026-08-01 00:00:00",
+                "po_order_deadline": "2026-08-15 00:00:00",
+                "grn_received_date": "2026-08-12 00:00:00"
+              }
+            ],
+            "vendor_lead_time_ratio": 0.7857142857142857
+          }
+        }
+      ],
+      "time_overrun_ratio": null,
+      "predicted_overrun_hours": 1.0,
+      "predecessor_time_overrun_ratio": 1.25,
+      "operator_pace_ratio": 1.25,
+      "material_shortfall_ratio": 2.5,
+      "composite_risk_score": 1.6142857142857145,
+      "is_delayed": true
+    }
+  ]
+}

@@ -457,9 +457,13 @@ def _job_signals(
 
     The value is recomputed from the de-duplicated components (identical to
     any single operation's, since the component list is MO-wide). The
-    contribution is the largest share the signal reached on any scorable
-    operation — a job-scoped line has to sort against operation-scoped lines
-    somehow, and its strongest showing is the honest comparator.
+    contribution is the share the signal held on the operation the SUMMARY
+    comes from — the worst scorable one. A job-scoped line has to sort
+    against operation-scoped ones somehow, and the summary operation is the
+    only denominator that makes those shares comparable: taking the largest
+    share across all operations instead would let a low-scoring operation
+    inflate a job-wide line to the top of the list, since the same shortfall
+    is a bigger fraction of a smaller score.
     """
     shortfall_total = 0.0
     for component in material_overrun:
@@ -473,26 +477,28 @@ def _job_signals(
         label="job material_shortfall_ratio",
     )
 
-    vendor_ratios = [
-        component.vendor_lead_time_ratio
-        for component in material_overrun
-        if component.vendor_lead_time_ratio is not None
-    ]
-    # The engine averages over ALL components with a vendor ratio, not only
-    # short ones, so fall back to the operations' own supplier evidence
-    # whenever nothing short carries a vendor.
-    if vendor_ratios:
-        supplier_value: float | None = sum(vendor_ratios) / len(vendor_ratios)
-    else:
-        per_operation = [
-            signal.value
-            for op in operations
-            for signal in op.signals
-            if signal.key == SIGNAL_SUPPLIER_RELIABILITY and signal.value is not None
-        ]
-        supplier_value = per_operation[0] if per_operation else None
+    # The supplier mean is taken from an operation's own evidence rather than
+    # recomputed over the short components: the engine averages across EVERY
+    # component that has a vendor ratio, not only the short ones, and the
+    # job-level number has to be the one that actually moved the score. Value
+    # and vendor names are read from the same operation in one step, so a line
+    # can never name a set of vendors the quoted mean was not taken over.
+    supplier_value: float | None = None
+    supplier_detail: dict[str, Any] = {}
+    for op in operations:
+        signal = op.signal(SIGNAL_SUPPLIER_RELIABILITY)
+        if signal is not None and signal.value is not None:
+            supplier_value = signal.value
+            supplier_detail = dict(signal.detail)
+            break
+
+    summary_op = _summary_operation(operations)
 
     def best_contribution(key: str) -> float | None:
+        if summary_op is not None:
+            signal = summary_op.signal(key)
+            if signal is not None and signal.contribution is not None:
+                return signal.contribution
         shares = [
             signal.contribution
             for op in operations
@@ -502,16 +508,9 @@ def _job_signals(
         ]
         return max(shares) if shares else None
 
-    def best_detail(key: str) -> dict[str, Any]:
-        for op in operations:
-            for signal in op.signals:
-                if signal.key == key:
-                    return dict(signal.detail)
-        return {}
-
-    material_detail = best_detail(SIGNAL_MATERIAL_SHORTFALL)
-    material_detail["short_components"] = [c.to_dict() for c in material_overrun]
-    supplier_detail = best_detail(SIGNAL_SUPPLIER_RELIABILITY)
+    material_detail: dict[str, Any] = {
+        "short_components": [c.to_dict() for c in material_overrun]
+    }
     supplier_detail["mean_lead_time_ratio"] = supplier_value
 
     return (
@@ -532,6 +531,18 @@ def _job_signals(
             detail=supplier_detail,
         ),
     )
+
+
+def _summary_operation(
+    operations: tuple[OperationEvidence, ...],
+) -> OperationEvidence | None:
+    """The scorable operation the job summary comes from: the worst one."""
+    candidates = [
+        op for op in operations if op.is_scorable and op.composite_risk_score is not None
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda op: op.composite_risk_score)
 
 
 def _summarise(
