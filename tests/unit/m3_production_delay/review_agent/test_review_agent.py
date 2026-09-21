@@ -284,3 +284,90 @@ def test_an_enabled_trace_reports_the_verdict_without_the_prompt(pack, draft, ca
     # Content is gated by the second switch, so no prompt or response body.
     assert "PROMPT START" not in caplog.text
     assert "EVIDENCE PACK" not in caplog.text
+
+
+# ─── markdown-fenced responses ───────────────────────────────────────────────
+#
+# Verified against a real Azure AI Foundry deployment: the model answers with a
+# ```json fence despite the prompt asking for JSON only. The content inside is
+# exactly the contract, so the fence is unwrapped rather than treated as a
+# parse failure — but nothing else is relaxed.
+
+
+@pytest.mark.parametrize(
+    ("wrapper", "label"),
+    [
+        ("```json\n{body}\n```", "json-tagged fence"),
+        ("```\n{body}\n```", "bare fence"),
+        ("  ```json\n{body}\n```  ", "fence with surrounding whitespace"),
+        ("{body}", "no fence at all"),
+    ],
+)
+def test_a_fenced_verdict_is_still_read(pack, draft, wrapper, label):
+    inner = _approve(len(draft.why_lines))
+    agent, _ = _agent(wrapper.replace("{body}", inner))
+    verdict = agent.judge(pack, draft)
+
+    assert verdict.approved is True, label
+    assert verdict.parse_error is None, label
+    assert len(verdict.lines) == len(draft.why_lines)
+
+
+def test_unwrapping_the_fence_does_not_relax_anything_else(pack, draft):
+    # A fenced response that is valid JSON but the wrong shape must still fail:
+    # the fence is packaging, not permission.
+    agent, _ = _agent('```json\n{"approved": "yes", "lines": []}\n```')
+    verdict = agent.judge(pack, draft)
+
+    assert verdict.approved is False
+    assert "schema_mismatch" in verdict.parse_error
+
+
+def test_prose_outside_a_fence_is_still_a_parse_failure(pack, draft):
+    agent, _ = _agent("Here is my verdict:\n\n" + _approve(len(draft.why_lines)))
+    verdict = agent.judge(pack, draft)
+
+    assert verdict.approved is False
+    assert "invalid_json" in verdict.parse_error
+
+
+def test_strip_code_fence_in_isolation():
+    from m3_production_delay.llm_agents.review_agent.resolver import strip_code_fence
+
+    assert strip_code_fence('```json\n{"a": 1}\n```') == '{"a": 1}'
+    assert strip_code_fence('```\n{"a": 1}\n```') == '{"a": 1}'
+    assert strip_code_fence('{"a": 1}') == '{"a": 1}'
+    # An unterminated fence still yields its content rather than nothing.
+    assert strip_code_fence('```json\n{"a": 1}') == '{"a": 1}'
+
+
+def test_commentary_after_the_verdict_is_ignored(pack, draft):
+    """Also from the real deployment: the model appends a sentence after the
+    JSON, which json.loads rejects as "Extra data". The verdict itself is
+    complete, so it is read and the trailing prose dropped."""
+    agent, _ = _agent(
+        _approve(len(draft.why_lines))
+        + "\n\nAll four lines are supported by the evidence pack above."
+    )
+    verdict = agent.judge(pack, draft)
+
+    assert verdict.approved is True
+    assert verdict.parse_error is None
+
+
+def test_a_fenced_verdict_with_trailing_commentary_is_read(pack, draft):
+    agent, _ = _agent(
+        "```json\n" + _approve(len(draft.why_lines)) + "\n```\n\nHope that helps."
+    )
+    verdict = agent.judge(pack, draft)
+    assert verdict.approved is True
+
+
+def test_a_truncated_verdict_still_fails(pack, draft):
+    # max_tokens cut the object off mid-way: there is no complete document to
+    # read, so this must not be salvaged into a partial verdict.
+    agent, _ = _agent('{"approved": true, "lines": [{"line_index": 0, "suppo')
+    verdict = agent.judge(pack, draft)
+
+    assert verdict.approved is False
+    assert "invalid_json" in verdict.parse_error

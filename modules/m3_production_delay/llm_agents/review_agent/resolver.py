@@ -107,13 +107,58 @@ def build_user_prompt(pack: "EvidencePack", draft: "InsightDraft") -> str:
     )
 
 
+def strip_code_fence(raw_text: str) -> str:
+    """Unwrap a markdown code fence around an otherwise-clean JSON response.
+
+    The system prompt asks for "JSON only, no prose before or after it", and
+    models still routinely answer with::
+
+        ```json
+        {"approved": true, ...}
+        ```
+
+    Verified against a real Foundry deployment: that is what comes back, and
+    ``json.loads`` fails on it at character 0. Unwrapping the fence is not
+    leniency about the contract — the content inside is exactly the contract —
+    it just declines to fail over the packaging. Everything after this stays
+    strict: prose outside a fence, or a fenced non-object, still raises.
+    """
+    text = raw_text.strip()
+    if not text.startswith("```"):
+        return text
+    # Drop the opening fence line, which may carry a language tag (```json).
+    _, _, remainder = text.partition("\n")
+    closing = remainder.rfind("```")
+    return (remainder[:closing] if closing != -1 else remainder).strip()
+
+
+def load_verdict_object(raw_text: str) -> object:
+    """Read ONE JSON document from the start of the response.
+
+    ``json.loads`` requires the whole string to be that document, and a real
+    model routinely appends a sentence of commentary after it — which fails as
+    ``Extra data: line 37 column 1``. ``raw_decode`` parses the first complete
+    value and simply does not consume the rest.
+
+    Trailing commentary is therefore tolerated; a *leading* preamble is not.
+    That asymmetry is deliberate rather than lazy: decoding from position zero
+    is a well-defined operation, whereas hunting for the first ``{`` inside
+    arbitrary prose is guessing where the document starts, and a wrong guess
+    would silently judge on a fragment. Anything this cannot read falls back to
+    the deterministic templates, which is a safe outcome rather than a broken
+    one.
+    """
+    payload, _end = json.JSONDecoder().raw_decode(strip_code_fence(raw_text))
+    return payload
+
+
 def _parse_verdict(raw_text: str, line_count: int) -> JudgeVerdict:
     """Strict parse, in the ``profile_extractor._parse_response`` style:
     ``json.loads`` then a structural check of every field, raising
     :class:`JudgeResponseError` on anything unexpected."""
     try:
-        payload = json.loads(raw_text)
-    except (json.JSONDecodeError, TypeError) as exc:
+        payload = load_verdict_object(raw_text)
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
         raise JudgeResponseError(f"invalid_json: {exc}") from exc
     if not isinstance(payload, dict):
         raise JudgeResponseError("schema_mismatch: response is not a JSON object")
