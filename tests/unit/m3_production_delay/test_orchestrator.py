@@ -254,3 +254,30 @@ def test_explicit_tenant_description_bypasses_tenant_context_reader():
     orchestrator.resolve_weights(request)  # must not raise via _ExplodingMetadataSource
 
     assert "explicitly supplied by an existing trusted caller" in provider.prompts[0]
+
+
+# --- H. resolve_risk_weights (rule-engine adapter boundary) ------------------
+
+
+def test_resolve_risk_weights_adapts_configured_weights_for_the_rule_engine():
+    provider = _StaticJsonLLMProvider([])  # would raise IndexError if ever called
+    orchestrator = ProductionDelayOrchestrator(llm_provider=provider)
+    configured_bp = {
+        "time_overrun": 4000,
+        "operator_skill": 3000,
+        "seasonality": 1000,
+        "material_availability": 1500,
+        "supplier_reliability": 500,
+    }
+    request = WeightAgentRequest(
+        tenant_id="tenant-i", availability=ALL_AVAILABLE, configured_bp=configured_bp
+    )
+
+    risk_weights = orchestrator.resolve_risk_weights(request)
+
+    assert risk_weights == {
+        "time_overrun_ratio": 0.40,
+        "operator_pace_ratio": 0.30,
+        "material_shortfall_ratio": 0.15,
+        "supplier_reliability": 0.05,
+    }

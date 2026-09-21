@@ -48,6 +48,7 @@ from m3_production_delay.llm_agents.weight_agent.models import (
 from m3_production_delay.llm_agents.weight_agent.providers import FittedWeightsProvider
 from m3_production_delay.llm_agents.weight_agent.resolver import WeightAgent
 from m3_production_delay.llm_agents.weight_agent.tracing import WeightAgentTracer
+from m3_production_delay.rule_engine.elements import weights_bp_to_risk_weights
 from m3_production_delay.tenant_context_reader import TenantContextReader
 
 log = get_logger("m3_production_delay.orchestrator")
@@ -164,6 +165,21 @@ class ProductionDelayOrchestrator:
             result.status,
         )
         return result
+
+    def resolve_risk_weights(self, request: WeightAgentRequest) -> dict[str, float]:
+        """Resolves this tenant's weights via the Weight Agent, then adapts
+        them into the rule engine's `risk_weights` shape (see
+        `rule_engine.elements.weights_bp_to_risk_weights`), ready to pass
+        straight into `rule_engine.elements.calculate_delay_elements_for_jobs`.
+
+        `resolve_weights()` above stays an unchanged pass-through to
+        `WeightAgent.resolve()` (see its own docstring); this method is the
+        one boundary where that result's basis-point signal vocabulary gets
+        translated into the rule engine's own key names and float scale -
+        the rule engine itself never depends on the Weight Agent's types.
+        """
+        result = self.resolve_weights(request)
+        return weights_bp_to_risk_weights(result.weights_bp)
 
 
 # ---------------------------------------------------------------------------
