@@ -137,9 +137,9 @@ def predicted_overrun_hours(op: dict) -> float | None:
     # been logged yet either, same reasoning as time_overrun_ratio - fall
     # through to the operator-history basis instead of projecting from a
     # meaningless "0 minutes for this much progress" rate.
-    if actual and current_done and job_quantity:
-        predicted_total_duration = actual * (job_quantity / current_done)
-        return (predicted_total_duration - expected) / 60.0
+    # if actual and current_done and job_quantity:
+    #     predicted_total_duration = actual * (job_quantity / current_done)
+    #     return (predicted_total_duration - expected) / 60.0
 
     op_pace = operator_pace_ratio(op)
     if op_pace is None:

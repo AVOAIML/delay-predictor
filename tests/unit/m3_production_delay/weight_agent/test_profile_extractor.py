@@ -63,6 +63,21 @@ def test_valid_response_parsed_on_first_attempt():
     assert len(provider.calls) == 1
 
 
+def test_json_code_fence_is_unwrapped_before_parsing():
+    provider = ScriptedProvider([f"```json\n{_valid_response()}\n```"])
+    result = _extract(provider)
+    assert result.profile.industry == "fabrication"
+    assert result.profile_confidence == 1.0
+    assert result.retried is False
+
+
+def test_fenced_json_with_surrounding_prose_remains_invalid():
+    fenced = f"Here is the result:\n```json\n{_valid_response()}\n```"
+    provider = ScriptedProvider([fenced, fenced])
+    with pytest.raises(LLMAdjustmentError, match="invalid_json"):
+        _extract(provider)
+
+
 def test_generation_config_requests_temperature_zero_and_a_fixed_seed():
     provider = ScriptedProvider([_valid_response()])
     _extract(provider)

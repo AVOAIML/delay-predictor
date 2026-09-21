@@ -24,6 +24,7 @@ from maxxflow_core.ports import GenerationConfig, LLMProvider
 
 from m3_production_delay.llm_agents.weight_agent.config import WeightAgentConfig
 from m3_production_delay.llm_agents.weight_agent.exceptions import LLMAdjustmentError
+from m3_production_delay.llm_agents.weight_agent.json_response import unwrap_json_code_fence
 from m3_production_delay.llm_agents.weight_agent.models import PROFILE_FIELDS, TenantProfile
 from m3_production_delay.llm_agents.weight_agent.tracing import NOOP_TRACER, WeightAgentTracer
 from m3_production_delay.prompt import load_prompt_template
@@ -68,7 +69,7 @@ def _build_prompt(description: str) -> str:
 
 def _parse_response(raw_text: str) -> tuple[TenantProfile, float, tuple[str, ...]]:
     try:
-        payload = json.loads(raw_text)
+        payload = json.loads(unwrap_json_code_fence(raw_text))
     except json.JSONDecodeError as exc:
         raise LLMAdjustmentError(f"invalid_json: {exc}") from exc
     if not isinstance(payload, dict):

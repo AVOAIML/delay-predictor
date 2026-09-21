@@ -1,5 +1,19 @@
 tenants:
 
+  demo:
+    description: >
+      A make-to-order discrete furniture manufacturer producing office desks,
+      tables, cabinets, and chairs in small production batches. Manufacturing
+      is semi-automated and combines machine cutting with manual assembly and
+      finishing. The business has medium dependency on material availability
+      and suppliers, using a moderately complex mix of locally sourced and
+      imported timber, metal fittings, and hardware. Supplier performance is
+      generally stable, although imported components can occasionally have
+      variable lead times. Production has high workforce dependency because
+      assembly and finishing require experienced operators, while workforce
+      stability is generally stable. Demand has low seasonality, and most work
+      is driven by customer orders rather than make-to-stock production.
+
   tenant_001:
     description: >
       Make-to-order metal manufacturer with high dependency on

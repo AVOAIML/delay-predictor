@@ -37,22 +37,39 @@ def main() -> None:
     da = get_data_access()
     with da.transaction(tenant=TENANT) as conn:
         # Clean up any earlier run of this script first (idempotent re-seed).
+        refs = [JOB_REFERENCE, f"{JOB_REFERENCE}-H1", f"{JOB_REFERENCE}-H2", f"{JOB_REFERENCE}-H3"]
+        supplier_reference_pattern = f"DEMO-%-{JOB_REFERENCE[-5:]}-%"
+        conn.execute(sa.text(
+            "DELETE FROM goods_received_notes WHERE reference_no LIKE :pattern"
+        ), {"pattern": supplier_reference_pattern})
+        conn.execute(sa.text(
+            "DELETE FROM purchase_order_lines WHERE purchase_order_id IN "
+            "(SELECT id FROM purchase_orders WHERE reference_no LIKE :pattern)"
+        ), {"pattern": supplier_reference_pattern})
+        conn.execute(sa.text(
+            "DELETE FROM purchase_orders WHERE reference_no LIKE :pattern"
+        ), {"pattern": supplier_reference_pattern})
+        conn.execute(sa.text(
+            "DELETE FROM item_vendors WHERE item_id IN "
+            "(SELECT mc.item_id FROM mo_components mc "
+            "JOIN manufacturing_orders mo ON mo.id = mc.mo_id WHERE mo.reference = :ref)"
+        ), {"ref": JOB_REFERENCE})
         conn.execute(sa.text(
             "DELETE FROM mo_components WHERE mo_id IN "
-            "(SELECT id FROM manufacturing_orders WHERE reference = :ref)"
-        ), {"ref": JOB_REFERENCE})
+            "(SELECT id FROM manufacturing_orders WHERE reference = ANY(:refs))"
+        ), {"refs": refs})
         conn.execute(sa.text(
             "DELETE FROM work_order_time_logs WHERE work_order_id IN "
             "(SELECT wo.id FROM work_orders wo JOIN manufacturing_orders mo ON mo.id = wo.mo_id "
-            "WHERE mo.reference = :ref)"
-        ), {"ref": JOB_REFERENCE})
+            "WHERE mo.reference = ANY(:refs))"
+        ), {"refs": refs})
         conn.execute(sa.text(
             "DELETE FROM work_orders WHERE mo_id IN "
-            "(SELECT id FROM manufacturing_orders WHERE reference = :ref)"
-        ), {"ref": JOB_REFERENCE})
+            "(SELECT id FROM manufacturing_orders WHERE reference = ANY(:refs))"
+        ), {"refs": refs})
         conn.execute(sa.text(
-            "DELETE FROM manufacturing_orders WHERE reference = :ref"
-        ), {"ref": JOB_REFERENCE})
+            "DELETE FROM manufacturing_orders WHERE reference = ANY(:refs)"
+        ), {"refs": refs})
         # Old Steel Rod/Screws/Nuts `items` rows from a prior run are left as
         # harmless orphans (insert_job() always creates fresh item rows) —
         # not worth tracking down by name just to delete on every re-seed.
