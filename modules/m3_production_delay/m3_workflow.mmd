@@ -1,0 +1,73 @@
+flowchart TD
+    A["WeightAgentRequest<br/>tenant_id, availability, optional weights/history/description"] --> B["ProductionDelayOrchestrator.resolve_weights()"]
+    B --> C["Create trace ID and start tracing"]
+
+    C --> D{"Tenant description supplied?"}
+    D -- Yes --> H["Use supplied description"]
+    D -- No --> E["TenantContextReader"]
+
+    subgraph TenantContext["Tenant-description lookup (first match wins)"]
+        E --> E1{"x-tenant-description header?"}
+        E1 -- Yes --> E4["Resolved description"]
+        E1 -- No --> E2{"Database description?"}
+        E2 -- Yes --> E4
+        E2 -- No --> E3{"Local YAML description?"}
+        E3 -- Yes --> E4
+        E3 -- No --> E5["Description unavailable"]
+    end
+
+    H --> I["WeightAgent.resolve()"]
+    E4 --> I
+    E5 --> I
+
+    I --> J{"Configured weights supplied?"}
+    J -- Yes --> K{"Valid signal set,<br/>sum = 10,000 bp,<br/>and within bounds?"}
+    K -- Yes --> Z1["Return CONFIGURED weights<br/>status: active<br/>admin approval: no"]
+    K -- No --> K1["Record configured_weights_invalid"]
+    J -- No --> L["Apply signal availability mask"]
+    K1 --> L
+
+    L --> M{"Any signals available?"}
+    M -- No --> ERR["Raise AllSignalsUnavailableError"]
+    M -- Yes --> N["Set unavailable weights to zero;<br/>redistribute prior and scale bounds"]
+
+    N --> O["Assess current tenant history<br/>for reporting/audit"]
+    O --> P["Request fitted weights for tenant"]
+    P --> Q{"Fitted artifact valid and signal set<br/>exactly matches available signals?"}
+    Q -- No --> CS["Cold-start path"]
+    Q -- Yes --> R["Calculate fitted influence λ<br/>using artifact delayed-event count"]
+    R --> S{"λ greater than zero?"}
+    S -- No --> CS
+    S -- Yes --> T{"Project fitted weights<br/>inside allowed bounds?"}
+    T -- No --> CS
+    T -- Yes --> U["Blend domain prior and fitted weights"]
+    U --> V{"Final projection succeeds?"}
+    V -- No --> CS
+    V -- Yes --> Z2["Return BLENDED or HISTORICALLY_FITTED<br/>status: recommendation<br/>admin approval: yes"]
+
+    CS --> W{"LLM enabled and tenant<br/>description available?"}
+    W -- No --> Z4["Return redistributed PRIOR<br/>status: recommendation<br/>admin approval: yes"]
+    W -- Yes --> X["LLM call 1: extract closed-vocabulary<br/>TenantProfile from description"]
+    X --> X1{"Profile valid, critical fields complete,<br/>and confidence high enough?"}
+    X1 -- No --> Z4
+    X1 -- Yes --> Y["LLM call 2: propose sum-to-zero<br/>weight adjustments"]
+    Y --> Y1{"Adjustment valid and<br/>projection succeeds?"}
+    Y1 -- No --> Z4
+    Y1 -- Yes --> Z3["Return LLM_ADJUSTED_PRIOR<br/>status: recommendation<br/>admin approval: yes"]
+
+    Z1 --> OUT["WeightResolution"]
+    Z2 --> OUT
+    Z3 --> OUT
+    Z4 --> OUT
+
+    OUT --> OUT1["Final weights always use five known signals,<br/>sum to 10,000 bp, and obey effective bounds"]
+
+    classDef success fill:#d9f7e8,stroke:#16875d,color:#123;
+    classDef recommendation fill:#fff3cd,stroke:#b58105,color:#123;
+    classDef error fill:#fde2e2,stroke:#c62828,color:#123;
+    classDef process fill:#e8f1ff,stroke:#2864b7,color:#123;
+
+    class Z1 success;
+    class Z2,Z3,Z4 recommendation;
+    class ERR error;
+    class B,E,I,L,N,O,P,R,U,X,Y,OUT process;

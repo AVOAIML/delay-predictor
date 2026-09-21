@@ -1,0 +1,72 @@
+flowchart TD
+    START["1. orchestrator.py<br/>CLI builds WeightAgentRequest"] --> ORCH["2. orchestrator.py<br/>ProductionDelayOrchestrator.resolve_weights()"]
+
+    ORCH --> DESC{"tenant_description provided?"}
+    DESC -- No --> TCR["3A. tenant_context_reader.py<br/>header → database → tenet_data.yml"]
+    DESC -- Yes --> RES
+    TCR --> RES["3B. resolver.py<br/>WeightAgent.resolve()"]
+
+    RES --> CFG["4. config.py<br/>Load prior, bounds, history policy,<br/>and LLM feature setting"]
+    CFG --> CONFIGURED{"configured_bp provided?"}
+
+    CONFIGURED -- Yes --> MODEL1["5A. models.py<br/>Validate and build WeightResolution"]
+    MODEL1 --> TRACE1["6A. tracing.py<br/>Trace final configured result"]
+    TRACE1 --> RETURN["Return to orchestrator.py"]
+
+    CONFIGURED -- No or invalid --> AVAIL["5B. availability.py<br/>Remove unavailable signals and<br/>redistribute prior weights"]
+    AVAIL --> ANY{"Any signals available?"}
+    ANY -- No --> ERROR["exceptions.py<br/>AllSignalsUnavailableError"]
+    ERROR --> ORCHERR["orchestrator.py<br/>CLI prints unavailable response"]
+
+    ANY -- Yes --> HISTORY["6B. history_policy.py<br/>Assess current tenant history"]
+    HISTORY --> PROVIDER["7. providers.py<br/>Fetch fitted weights for tenant"]
+    PROVIDER --> FITTED{"Compatible fitted artifact<br/>with enough delayed events?"}
+
+    FITTED -- Yes --> PROJ1["8A. projection.py<br/>Project fitted weights into bounds"]
+    PROJ1 --> BLEND["9A. blend.py<br/>Calculate lambda and blend<br/>prior + fitted weights"]
+    BLEND --> PROJ2["10A. projection.py<br/>Final bounds projection"]
+    PROJ2 --> MODEL2["11A. models.py<br/>Build blended/fitted WeightResolution"]
+    MODEL2 --> TRACE2["12A. tracing.py<br/>Trace final fitted result"]
+    TRACE2 --> RETURN
+
+    FITTED -- No --> LLMGATE{"LLM enabled and description available?"}
+    PROJ1 -. failure .-> LLMGATE
+    PROJ2 -. failure .-> LLMGATE
+
+    LLMGATE -- Yes --> PROFILE["8B. profile_extractor.py<br/>Build prompt and extract TenantProfile"]
+    PROFILE --> PPROMPT["prompt/profile_extraction.txt"]
+    PPROMPT --> LLM1["maxxflow_providers/factory.py + llm.py<br/>LLM call #1"]
+    LLM1 --> PROFILEGATE{"Profile complete and confident?"}
+
+    PROFILEGATE -- Yes --> ADJUST["9B. weight_adjustment.py<br/>Build adjustment prompt"]
+    ADJUST --> APROMPT["prompt/weight_adjustment.txt"]
+    APROMPT --> LLM2["maxxflow_providers/llm.py<br/>LLM call #2"]
+    LLM2 --> PROJ3["10B. projection.py<br/>Validate/project proposed adjustment"]
+    PROJ3 --> MODEL3["11B. models.py<br/>Build LLM-adjusted WeightResolution"]
+    MODEL3 --> TRACE3["12B. tracing.py<br/>Trace final LLM result"]
+    TRACE3 --> RETURN
+
+    LLMGATE -- No --> PRIOR["8C. resolver.py<br/>Use redistributed domain prior"]
+    PROFILEGATE -- No --> PRIOR
+    PROFILE -. call/parse failure .-> PRIOR
+    ADJUST -. call/validation failure .-> PRIOR
+    PROJ3 -. failure .-> PRIOR
+    PRIOR --> MODEL4["9C. models.py<br/>Build prior WeightResolution"]
+    MODEL4 --> TRACE4["10C. tracing.py<br/>Trace final prior result"]
+    TRACE4 --> RETURN
+
+    RETURN --> JSON["orchestrator.py<br/>Return result or CLI prints JSON"]
+
+    classDef entry fill:#e8f1ff,stroke:#2864b7,color:#123;
+    classDef configured fill:#d9f7e8,stroke:#16875d,color:#123;
+    classDef fitted fill:#e8dcff,stroke:#7048b3,color:#123;
+    classDef llm fill:#fff3cd,stroke:#b58105,color:#123;
+    classDef fallback fill:#f4f4f4,stroke:#666,color:#123;
+    classDef error fill:#fde2e2,stroke:#c62828,color:#123;
+
+    class START,ORCH,TCR,RES,CFG,RETURN,JSON entry;
+    class MODEL1,TRACE1 configured;
+    class HISTORY,PROVIDER,PROJ1,BLEND,PROJ2,MODEL2,TRACE2 fitted;
+    class PROFILE,PPROMPT,LLM1,ADJUST,APROMPT,LLM2,PROJ3,MODEL3,TRACE3 llm;
+    class AVAIL,PRIOR,MODEL4,TRACE4 fallback;
+    class ERROR,ORCHERR error;

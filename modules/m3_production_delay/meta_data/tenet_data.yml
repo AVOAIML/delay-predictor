@@ -1,0 +1,54 @@
+tenants:
+
+  tenant_001:
+    description: >
+      Make-to-order metal manufacturer with high dependency on
+      imported raw materials, frequent supplier delays,
+      stable workforce, and low seasonal variation.
+
+  tenant_002:
+    description: >
+      Electronics manufacturer with high automation,
+      stable suppliers, and moderate seasonal demand.
+
+  tenant_003:
+    description: >
+      A medical device and pharmaceutical manufacturing company producing
+      regulated healthcare products such as diagnostic equipment, sterile
+      consumables, and packaged medicines. Production is primarily
+      make-to-order and batch-based, with strict quality-control and
+      compliance requirements. The company has high dependency on certified
+      raw materials and approved suppliers, with limited material
+      substitutions due to regulatory requirements. Supplier delays can
+      significantly affect production schedules, especially for imported
+      components and specialized medical-grade materials. Operator skill is
+      important because several production and quality-control processes
+      require trained personnel and certified technicians. Workforce
+      stability is generally high, but shortages of qualified operators can
+      create production bottlenecks. Production demand is moderately
+      seasonal, and the facility has a medium-to-high level of automation
+      with several inspection, validation, and packaging processes still
+      requiring human intervention.
+
+  tenant_004:
+    description: >
+      A make-to-order medical device manufacturer with extremely high dependency
+      on imported, certified, and single-source raw materials. Most critical
+      components cannot be substituted because of regulatory and quality-control
+      requirements. Production delays are frequently caused by material shortages
+      and late supplier deliveries. Several critical components are purchased from
+      overseas suppliers with long and highly variable lead times. Supplier
+      delivery performance is unstable, and delayed purchase orders regularly
+      cause production jobs to wait for materials before manufacturing can continue.
+
+      The production workforce is highly experienced, stable, and cross-trained.
+      Operator shortages and skill-related production delays are rare. Most
+      production processes are highly automated, and operator performance has
+      historically had a relatively small impact on overall production delays.
+
+      Customer demand is relatively stable throughout the year with very little
+      seasonal variation.
+
+      The main production-delay risks for this company are therefore material
+      availability and supplier reliability, while workforce skill and seasonality
+      have comparatively low impact on production delays.x

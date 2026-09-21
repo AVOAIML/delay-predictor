@@ -50,6 +50,10 @@ dependencies = [
   "tzdata>=2024.1",
   "adlfs>=2024.2",
   "azure-identity>=1.17",
+  # M3 local tenant-metadata fallback (m3_production_delay.tenant_context_reader).
+  # Already present transitively (mlflow pulls it in) but was never a direct,
+  # declared dependency of any module that imports it directly until now.
+  "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -68,6 +72,11 @@ serve = ["azureml-inference-server-http>=1.0"]  # BYOC serving (azmlinfsrv) — 
 # `ModuleNotFoundError: No module named 'azure.keyvault'` — the one dependency
 # that only the remote half of the system needs.
 aml = ["azure-ai-ml>=1.20", "azure-identity>=1.17", "azure-keyvault-secrets>=4.8"]
+# Real LLM adapter (libs/maxxflow_providers/llm.py AzureOpenAILLMProvider),
+# both plain OpenAI and Azure OpenAI — same wire-compatible Chat Completions
+# client. Optional so the deterministic StubLLMProvider (the LLM_PROVIDER
+# default) keeps the core test suite/CI free of any real SDK or network call.
+llm = ["openai>=1.30"]
 ui = [                                          # Configurator API + dashboard (local services)
   "fastapi>=0.110",
   "uvicorn[standard]>=0.29",
@@ -88,6 +97,17 @@ maxxflow = "maxxflow_cli.__main__:main"
 # §3 monorepo layout: shared code in libs/, module code in modules/.
 # Each is a top-level importable package; one distribution, one pinned env.
 where = ["libs", "modules"]
+
+[tool.setuptools.package-data]
+# Prompt template text files are read at import time (m3_production_delay
+# .prompt.load_prompt_template) but are not Python source, so setuptools
+# does not bundle them into a real (non-editable) wheel by default — unlike
+# an editable install, which just points back at the source tree. Verified
+# empirically: without this, `python -m build --wheel` silently drops the
+# .txt files while keeping prompt/__init__.py, which would only surface as
+# a FileNotFoundError the first time the deployed package tries to import
+# profile_extractor.py or weight_adjustment.py.
+"m3_production_delay.prompt" = ["*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
