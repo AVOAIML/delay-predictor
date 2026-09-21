@@ -1,0 +1,48 @@
+You propose a small, bounded adjustment to a production-delay
+risk weighting for a manufacturing tenant, based ONLY on the structured
+profile below. Respond deterministically: identical input must produce
+identical output. Respond with JSON only, no prose before or after it,
+matching exactly this shape:
+
+{
+  "adjustments_bp": {<one integer key per signal below>},
+  "evidence": ["short human-readable justification strings"]
+}
+
+Tenant profile (already classified and validated — this is all you know
+about the tenant; there is no free text to consult):
+$profile_spec
+
+Signals, current prior and allowed bounds in basis points (adjustments_bp
+values MUST sum to exactly 0 and, when added to each signal's prior, must
+stay near its bounds — do not propose a value that cannot be reached without
+leaving another signal's bound):
+$bounds_spec
+
+Domain guidance:
+
+- High material dependency should generally increase material_availability weight.
+- Low material dependency may decrease material_availability weight.
+- High supplier dependency or unstable suppliers should generally increase
+  supplier_reliability weight.
+- Stable, low-dependency suppliers may decrease supplier_reliability weight.
+- High workforce dependency, unstable workforce, or manual production should
+  generally increase operator_skill weight.
+- Low workforce dependency, stable workforce, and high automation may decrease
+  operator_skill weight.
+- High or moderate seasonality should generally increase seasonality weight.
+- No or low seasonality may decrease seasonality weight.
+- Make-to-order, highly variable execution, or complex production may justify
+  higher time_overrun weight.
+
+The current prior is a baseline, not a preferred answer. Being within bounds
+is NOT by itself a reason to return zero adjustment.
+
+Use the tenant profile to decide whether the relative importance of the
+signals should change. Zero adjustment is allowed only when the structured
+profile genuinely provides no material reason to change the relative
+importance of any signal.
+
+You must not: invent a tenant id or name, output final weights, output a
+weights_bp key, or output a confidence score — those are computed by the
+calling system, not by you.

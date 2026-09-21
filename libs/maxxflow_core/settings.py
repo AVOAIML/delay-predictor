@@ -152,6 +152,12 @@ class Settings(BaseSettings):
     # verify-before-building: confirm the deployed model id/region before use.
     llm_model_id: str = Field(default="", alias="LLM_MODEL_ID")
     embedding_model_id: str = Field(default="", alias="EMBEDDING_MODEL_ID")
+    # Real LLM credentials (AzureOpenAILLMProvider, gated behind LLM_PROVIDER
+    # in {"openai","azure_openai"} — the default "stub" reads none of these).
+    openai_api_key: SecretStr = Field(default=SecretStr(""), alias="OPENAI_API_KEY")
+    azure_openai_api_key: SecretStr = Field(default=SecretStr(""), alias="AZURE_OPENAI_API_KEY")
+    azure_openai_endpoint: str = Field(default="", alias="AZURE_OPENAI_ENDPOINT")
+    azure_openai_api_version: str = Field(default="", alias="AZURE_OPENAI_API_VERSION")
 
     # --- secrets / determinism ------------------------------------------------
     # Operator UUIDs are PII; HMAC(salt)->tier in the DAL before bronze. The salt
@@ -205,6 +211,22 @@ class Settings(BaseSettings):
     # --- serving --------------------------------------------------------------
     # BYOC multi-model router under azmlinfsrv. LRU size bounds resident models.
     model_lru_size: int = Field(default=8, alias="MODEL_LRU_SIZE")
+
+    # --- M3 weight agent --------------------------------------------------------
+    # Cold-start LLM-adjusted-prior path (modules/m3_production_delay/llm_agents/
+    # weight_agent). Off => every non-configured, non-fitted resolution returns
+    # the redistributed prior directly, same as an LLM failure would.
+    m3_weight_llm_enabled: bool = Field(default=True, alias="M3_WEIGHT_AGENT_LLM_ENABLED")
+    # Local/debug execution trace (modules/m3_production_delay/llm_agents/
+    # weight_agent/tracing.py). Off in production by default; never read via
+    # os.environ directly inside the Weight Agent or orchestrator — only
+    # through these two settings. include_content additionally gates whether
+    # raw tenant description / raw LLM prompt / raw LLM response text is
+    # ever emitted, even when the trace itself is on.
+    m3_weight_trace_enabled: bool = Field(default=False, alias="M3_WEIGHT_AGENT_TRACE_ENABLED")
+    m3_weight_trace_include_content: bool = Field(
+        default=False, alias="M3_WEIGHT_AGENT_TRACE_INCLUDE_CONTENT"
+    )
 
     def tenant_schema(self, tenant_slug: str | None = None) -> str:
         slug = tenant_slug or self.default_tenant

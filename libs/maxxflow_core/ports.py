@@ -9,6 +9,7 @@ chosen by a factory that reads ``Settings`` — there is no ``if env==`` anywher
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 import numpy as np
@@ -56,12 +57,37 @@ class ModelRegistry(Protocol):
     def get_alias_version(self, *, name: str, alias: str) -> str | None: ...
 
 
+@dataclass(frozen=True)
+class GenerationConfig:
+    """Generation controls a caller may request of an :class:`LLMProvider`.
+
+    Not every field is honoured by every adapter — ``StubLLMProvider`` is
+    already fully deterministic and ignores this; the Phase-2 Azure adapter
+    is the one expected to actually vary its call based on it. Even at
+    temperature 0 with a fixed seed, a real provider is not guaranteed to
+    return byte-identical text run to run (batching/hardware nondeterminism
+    is a known property of hosted LLM inference) — this narrows variance, it
+    does not promise it away. Callers that need a true determinism guarantee
+    get it from validating/normalising the response deterministically
+    afterwards, not from this alone.
+    """
+
+    temperature: float = 0.0
+    seed: int | None = None
+
+
 @runtime_checkable
 class LLMProvider(Protocol):
     """External LLM API (Azure OpenAI / OpenAI / Foundry). Text generation ONLY,
     NEVER scoring. Deterministic stub for local/CI."""
 
-    def generate(self, prompt: str, *, max_tokens: int = 256) -> str: ...
+    def generate(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int = 256,
+        generation_config: GenerationConfig | None = None,
+    ) -> str: ...
 
     @property
     def name(self) -> str: ...

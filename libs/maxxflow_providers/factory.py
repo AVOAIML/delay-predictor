@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from maxxflow_core.ports import EmbeddingProvider, LLMProvider
 from maxxflow_core.settings import get_settings
 from maxxflow_providers.embeddings import AzureOpenAIEmbeddingProvider, StubEmbeddingProvider
 from maxxflow_providers.llm import AzureOpenAILLMProvider, StubLLMProvider
@@ -18,12 +19,12 @@ _EMB = {
 }
 
 
-def get_llm_provider():
+def get_llm_provider() -> LLMProvider:
     s = get_settings()
     return _LLM[s.llm_provider]()
 
 
-def get_embedding_provider():
+def get_embedding_provider() -> EmbeddingProvider:
     s = get_settings()
     cls = _EMB[s.embedding_provider]
     return cls(enabled=s.embeddings_enabled)
