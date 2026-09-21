@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "MaXXFlow \u2014 M3 Production Delay",
-    "description": "End-to-end checks for M3 (Production Delay Predictor) against the local stack.\n\nRun the requests in order: the write request is what puts `ai_delay_insight` on each manufacturing order, and the read requests verify it landed.\n\nPrerequisites:\n  docker compose -f compose.local.yml up -d --wait postgres minio minio-init mlflow configurator-api\n  uv run python -m maxxflow_cli db-provision --tenant demo\n  uv run python scripts/seed_m3_demo.py --tenant demo\n\nThe seeded demo tenant has four jobs, one per outcome the review pipeline can produce:\n  WH/MO/00142  overrunning + short material + late vendor -> four explanation lines\n  WH/MO/00143  everything on schedule                     -> approved, no lines\n  WH/MO/00144  nothing logged yet                         -> suppressed_not_scorable\n  WH/MO/00145  a component with zero stock                -> infinity coerced and flagged\n\nAUTH \u2014 every /api/* route is authenticated. Two things are required:\n  Authorization: Bearer {{token}}   (set at collection level, inherited by each request)\n  x-tenant-slug: {{tenant}}          (must match the tenant in the URL)\n\nMint a token with:\n  uv run python scripts/dev_auth.py --tenant demo --token-only\nthen paste it into the collection's `token` variable. It lasts 12 hours.",
+    "description": "End-to-end checks for M3 (Production Delay Predictor) against the local stack.\n\nRun the requests in order: the write request is what puts `ai_delay_insight` on each manufacturing order, and the read requests verify it landed.\n\nPrerequisites:\n  docker compose -f compose.local.yml up -d --wait postgres minio minio-init mlflow configurator-api\n  uv run python -m maxxflow_cli db-provision --tenant demo\n  uv run python scripts/seed_m3_demo.py --tenant demo\n\nThe seeded demo tenant has four jobs, one per outcome the review pipeline can produce:\n  WH/MO/00142  overrunning + short material + late vendor -> four explanation lines\n  WH/MO/00143  everything on schedule                     -> approved, no lines\n  WH/MO/00144  nothing logged yet                         -> suppressed_not_scorable\n  WH/MO/00145  a component with zero stock                -> infinity coerced and flagged\n\nAUTH \u2014 every /api/* route is authenticated. Two things are required:\n  Authorization: Bearer {{token}}   (set at collection level, inherited by each request)\n  x-tenant-slug: {{tenant}}          (must match the tenant in the URL)\n\nMint a token with:\n  uv run python scripts/dev_auth.py --tenant demo --token-only\nthen paste it into the collection's `token` variable. It lasts 12 hours.\n\nIf you ever see \"Invalid character in header content\", the token has a stray newline from copy-paste. The collection's pre-request script strips it automatically, so this should not reach you \u2014 but importing the generated environment (scripts/dev_auth.py --postman-env) avoids the paste entirely.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -524,5 +524,37 @@
         "type": "string"
       }
     ]
-  }
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Postman refuses any header containing a control character, so a token",
+          "// pasted with a trailing newline fails with:",
+          "//   Invalid character in header content [\"Authorization\"]",
+          "// A JWT is three base64url segments joined by dots and contains no",
+          "// whitespace of any kind, so stripping every whitespace character is",
+          "// always safe and fixes the paste for good.",
+          "const sources = [",
+          "  pm.environment.get('token'),",
+          "  pm.collectionVariables.get('token'),",
+          "  pm.globals.get('token'),",
+          "];",
+          "const raw = sources.find(v => v && String(v).trim() && String(v).trim() !== 'PASTE-TOKEN-HERE');",
+          "",
+          "if (!raw) {",
+          "  console.warn('No token set. Run: uv run python scripts/dev_auth.py --tenant demo --postman-env');",
+          "} else {",
+          "  const clean = String(raw).replace(/\\s+/g, '');",
+          "  if (clean !== String(raw)) {",
+          "    console.warn('Token contained whitespace (usually a trailing newline) \u2014 stripped for this request.');",
+          "  }",
+          "  pm.variables.set('token', clean);",
+          "}"
+        ]
+      }
+    }
+  ]
 }
