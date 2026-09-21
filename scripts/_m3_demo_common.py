@@ -36,6 +36,188 @@ def _u() -> str:
     return str(uuid.uuid4())
 
 
+def _insert_operator_history(
+    conn: sa.Connection,
+    *,
+    job_reference: str,
+    operation_id: str,
+    work_center_id: str,
+    operator_id: str,
+    product_id: str,
+) -> None:
+    """Seed three completed jobs for the assigned demo operator.
+
+    Their elapsed/scheduled ratios are 1.3, 1.4 and 1.5, so the rule
+    engine's operator pace input is deterministically 1.4.
+    """
+    for index, elapsed_minutes in enumerate((130, 140, 150), start=1):
+        history_mo_id = _u()
+        history_wo_id = _u()
+        conn.execute(
+            sa.text(
+                """
+                INSERT INTO manufacturing_orders
+                    (id, reference, product_id, quantity, status_id, component_status_id,
+                     confirmed_at, completed_at)
+                VALUES
+                    (:id, :reference, :product, 1, :status, :avail,
+                     now() - make_interval(days => :days_old),
+                     now() - make_interval(days => :days_old) + make_interval(mins => :elapsed))
+                """
+            ),
+            {
+                "id": history_mo_id,
+                "reference": f"{job_reference}-H{index}",
+                "product": product_id,
+                "status": MO_STATUS_IN_PROGRESS,
+                "avail": AVAILABILITY_PARTIAL,
+                "days_old": index + 3,
+                "elapsed": elapsed_minutes,
+            },
+        )
+        conn.execute(
+            sa.text(
+                """
+                INSERT INTO work_orders
+                    (id, mo_id, operation_id, work_center_id, quantity, units_done,
+                     expected_duration, real_duration, scheduled_start, scheduled_end,
+                     actual_start, actual_end, assigned_operators, status_id)
+                VALUES
+                    (:id, :mo, :op, :wc, 1, 1, 100, :elapsed,
+                     now() - make_interval(days => :days_old),
+                     now() - make_interval(days => :days_old) + interval '100 minutes',
+                     now() - make_interval(days => :days_old),
+                     now() - make_interval(days => :days_old) + make_interval(mins => :elapsed),
+                     ARRAY[:operator]::text[], :status)
+                """
+            ),
+            {
+                "id": history_wo_id,
+                "mo": history_mo_id,
+                "op": operation_id,
+                "wc": work_center_id,
+                "elapsed": elapsed_minutes,
+                "days_old": index + 3,
+                "operator": operator_id,
+                "status": STATUS_IN_PROGRESS,
+            },
+        )
+        conn.execute(
+            sa.text(
+                """
+                INSERT INTO work_order_time_logs
+                    (id, work_order_id, operator_id, started_at, ended_at, duration_minutes)
+                VALUES
+                    (:id, :wo, :operator,
+                     now() - make_interval(days => :days_old),
+                     now() - make_interval(days => :days_old) + make_interval(mins => :elapsed),
+                     :elapsed)
+                """
+            ),
+            {
+                "id": _u(),
+                "wo": history_wo_id,
+                "operator": operator_id,
+                "days_old": index + 3,
+                "elapsed": elapsed_minutes,
+            },
+        )
+
+
+def _insert_supplier_history(
+    conn: sa.Connection,
+    *,
+    job_reference: str,
+    item_id: str,
+    item_name: str,
+    component_index: int,
+) -> None:
+    """Seed a vendor and three received POs for one component.
+
+    Each PO promises a ten-day window and arrives after 13, 15 or 17 days,
+    producing lead-time ratios 1.3, 1.5 and 1.7 (mean 1.5).
+    """
+    vendor_id = _u()
+    conn.execute(
+        sa.text(
+            """
+            INSERT INTO item_vendors
+                (id, item_id, vendor_id, vendor_name, lead_time_days, unit_price)
+            VALUES (:id, :item, :vendor, :name, 10, 1.00)
+            """
+        ),
+        {
+            "id": _u(),
+            "item": item_id,
+            "vendor": vendor_id,
+            "name": f"Demo Supplier {component_index}",
+        },
+    )
+
+    for po_index, received_days in enumerate((13, 15, 17), start=1):
+        po_id = _u()
+        warehouse_id = _u()
+        sent_days_ago = 40 + po_index
+        conn.execute(
+            sa.text(
+                """
+                INSERT INTO purchase_orders
+                    (id, reference_no, vendor_id, warehouse_id,
+                     scheduled_delivery_date, status, sent_at, created_at)
+                VALUES
+                    (:id, :reference, :vendor, :warehouse,
+                     now() - make_interval(days => :sent_days_ago) + interval '10 days',
+                     'Goods Received',
+                     now() - make_interval(days => :sent_days_ago),
+                     now() - make_interval(days => :sent_days_ago) - interval '1 day')
+                """
+            ),
+            {
+                "id": po_id,
+                "reference": f"DEMO-PO-{job_reference[-5:]}-{component_index}-{po_index}",
+                "vendor": vendor_id,
+                "warehouse": warehouse_id,
+                "sent_days_ago": sent_days_ago,
+            },
+        )
+        conn.execute(
+            sa.text(
+                """
+                INSERT INTO purchase_order_lines
+                    (id, purchase_order_id, item_id, item_name,
+                     ordered_quantity, received_quantity, unit_price)
+                VALUES (:id, :po, :item, :name, 100, 100, 1.00)
+                """
+            ),
+            {"id": _u(), "po": po_id, "item": item_id, "name": item_name},
+        )
+        conn.execute(
+            sa.text(
+                """
+                INSERT INTO goods_received_notes
+                    (id, reference_no, purchase_order_id, vendor_id, warehouse_id,
+                     scheduled_delivery_date, status, is_partially_closed,
+                     created_at, updated_at)
+                VALUES
+                    (:id, :reference, :po, :vendor, :warehouse,
+                     now() - make_interval(days => :sent_days_ago) + interval '10 days',
+                     'Goods Received', false,
+                     now() - make_interval(days => :sent_days_ago) + make_interval(days => :received_days),
+                     now() - make_interval(days => :sent_days_ago) + make_interval(days => :received_days))
+                """
+            ),
+            {
+                "id": _u(),
+                "reference": f"DEMO-GRN-{job_reference[-5:]}-{component_index}-{po_index}",
+                "po": po_id,
+                "vendor": vendor_id,
+                "warehouse": warehouse_id,
+                "sent_days_ago": sent_days_ago,
+                "received_days": received_days,
+            },
+        )
+
+
 def ensure_reference_data(conn: sa.Connection) -> None:
     """Idempotent: the fixed master-data rows every seeded job points at."""
     conn.execute(
@@ -152,7 +334,16 @@ def insert_job(
         {"id": _u(), "wo": ids["wo"], "operator": ids["operator"], "actual": actual_duration_minutes},
     )
 
-    for component in components:
+    _insert_operator_history(
+        conn,
+        job_reference=job_reference,
+        operation_id=ids["op"],
+        work_center_id=ids["wc"],
+        operator_id=ids["operator"],
+        product_id=ids["product"],
+    )
+
+    for component_index, component in enumerate(components, start=1):
         item_id = _u()
         conn.execute(
             sa.text(
@@ -177,4 +368,11 @@ def insert_job(
                 "id": _u(), "mo": ids["mo"], "item": item_id, "required": component["required_quantity"],
                 "available": component["available_quantity"], "avail": AVAILABILITY_PARTIAL,
             },
+        )
+        _insert_supplier_history(
+            conn,
+            job_reference=job_reference,
+            item_id=item_id,
+            item_name=component["name"],
+            component_index=component_index,
         )

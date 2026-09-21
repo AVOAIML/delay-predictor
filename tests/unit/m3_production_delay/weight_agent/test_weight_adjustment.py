@@ -79,6 +79,13 @@ def test_valid_response_parsed_on_first_attempt():
     assert len(provider.calls) == 1
 
 
+def test_json_code_fence_is_unwrapped_before_parsing():
+    provider = ScriptedProvider([f"```json\n{_valid_response()}\n```"])
+    result = _propose(provider)
+    assert result.adjustment_bp == ZERO_SUM_ADJUSTMENT
+    assert result.retried is False
+
+
 def test_prompt_never_contains_raw_tenant_description_text():
     # the trust boundary from Improvement 2: this stage's signature has no
     # description parameter at all, so there is nothing to check for leakage
