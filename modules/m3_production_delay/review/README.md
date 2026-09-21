@@ -229,7 +229,7 @@ insight = review_job(job, weights, threshold, lambda system, user: '{"approved":
 ### One job, end to end (dry run, no writes)
 
 ```bash
-uv run python -m m3_production_delay.review.pipeline --tenant demo --threshold 1.0 --job "WH/MO/00142" --dry-run
+uv run python -m m3_production_delay.review --tenant demo --threshold 1.0 --job "WH/MO/00142" --dry-run
 ```
 
 Drop `--dry-run` to write to `manufacturing_orders.customElements`; drop

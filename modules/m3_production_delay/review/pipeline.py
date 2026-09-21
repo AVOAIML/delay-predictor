@@ -235,7 +235,7 @@ def run(
 
 def _run_cli(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="m3_production_delay.review.pipeline",
+        prog="python -m m3_production_delay.review",
         description=(
             "Review the Risk Engine's delay scores for one tenant and write the validated "
             "insight to manufacturing_orders.customElements."
