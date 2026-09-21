@@ -28,16 +28,14 @@ x-app-env: &app-env
   MLFLOW_TRACKING_URI: http://mlflow:5000
   MLFLOW_REGISTRY_URI: http://mlflow:5000
   MODEL_ALIAS: champion
-  # Deterministic stubs by default — no paid API from a local container.
-  # Point M3's judge at a real model by setting these in .env.local:
-  #   LLM_PROVIDER=azure_ai
-  #   AZURE_AI_API_KEY=... / AZURE_AI_API_BASE=... / LLM_MODEL_ID=<deployment>
-  LLM_PROVIDER: ${LLM_PROVIDER:-stub}
   EMBEDDING_PROVIDER: stub
   EMBEDDINGS_ENABLED: "false"
-  LLM_MODEL_ID: ${LLM_MODEL_ID:-}
-  AZURE_AI_API_KEY: ${AZURE_AI_API_KEY:-}
-  AZURE_AI_API_BASE: ${AZURE_AI_API_BASE:-}
+  # LLM_PROVIDER / LLM_MODEL_ID / AZURE_AI_* are deliberately NOT set here.
+  # Anything under `environment:` becomes a real environment variable in the
+  # container, and a real env var outranks every file pydantic-settings reads —
+  # so listing them here would make .env.local impossible to override with.
+  # They come from the `env_file` below instead, and default to the stub in
+  # config/profiles/local.env when that file is absent.
   HMAC_SALT: local-dev-salt-change-me
   # Every /api/* route is authenticated (services/configurator/security.py).
   # Locally the HS256 path is the usable one: mint a matching token with
@@ -132,6 +130,11 @@ services:
       target: ui
     command: uvicorn services.configurator.app:app --host 0.0.0.0 --port 8000
     environment: *app-env
+    # Local secrets, git-ignored. `required: false` so a fresh checkout without
+    # one still starts — on the deterministic stub.
+    env_file:
+      - path: .env.local
+        required: false
     ports: ["${API_PORT:-8000}:8000"]
     depends_on:
       postgres: {condition: service_healthy}
@@ -154,6 +157,9 @@ services:
     environment:
       <<: *app-env
       MODEL_SERVER_URL: http://model-server:5001
+    env_file:
+      - path: .env.local
+        required: false
     ports: ["${DASHBOARD_PORT:-8501}:8501"]
     depends_on:
       postgres: {condition: service_healthy}
@@ -167,6 +173,9 @@ services:
       <<: *app-build
       target: serve
     environment: *app-env
+    env_file:
+      - path: .env.local
+        required: false
     ports: ["${MODEL_SERVER_PORT:-5001}:5001"]
     depends_on:
       mlflow: {condition: service_healthy}
