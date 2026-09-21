@@ -39,6 +39,12 @@ x-app-env: &app-env
   AZURE_AI_API_KEY: ${AZURE_AI_API_KEY:-}
   AZURE_AI_API_BASE: ${AZURE_AI_API_BASE:-}
   HMAC_SALT: local-dev-salt-change-me
+  # Every /api/* route is authenticated (services/configurator/security.py).
+  # Locally the HS256 path is the usable one: mint a matching token with
+  # `python scripts/dev_auth.py`, which also seeds the identity rows the
+  # verifier reads. A real deployment sets JWT_AUTHORITY/JWT_JWKS_URI instead
+  # and leaves this unset.
+  JWT_SECRET: ${JWT_SECRET:-local-dev-jwt-secret-change-me-32b}
   DEFAULT_TENANT: demo
   TENANT_SCHEMA_PREFIX: tenant_
   PRESENTATION_TZ: Australia/Sydney
