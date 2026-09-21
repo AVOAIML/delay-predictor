@@ -65,6 +65,11 @@ from typing import Any
 
 import pandas as pd
 
+from maxxflow_core.errors import get_logger
+
+
+log = get_logger("m3_production_delay.rule_engine.elements")
+
 
 def _is_missing(value: Any) -> bool:
     return value is None or pd.isna(value)
@@ -370,28 +375,61 @@ def _calculate_delay_elements_for_one_job(
         op_operator_pace = operator_pace_ratio(op)
         op_material_shortfall = material_shortfall_ratio(op)
         op_supplier_reliability = _supplier_reliability(enriched_components)
-        op_risk_score = composite_risk_score(
-            {
-                "time_overrun_ratio": op_time_overrun,
-                "operator_pace_ratio": op_operator_pace,
-                "material_shortfall_ratio": op_material_shortfall,
-                "supplier_reliability": op_supplier_reliability,
-            },
-            risk_weights,
+        risk_values = {
+            "time_overrun_ratio": op_time_overrun,
+            "operator_pace_ratio": op_operator_pace,
+            "material_shortfall_ratio": op_material_shortfall,
+            "supplier_reliability": op_supplier_reliability,
+        }
+        op_risk_score = composite_risk_score(risk_values, risk_weights)
+        op_predicted_overrun = predicted_overrun_hours(op)
+        active_terms = {
+            key: {
+                "value": risk_values.get(key),
+                "weight": weight,
+                "weighted_value": weight * risk_values[key],
+            }
+            for key, weight in risk_weights.items()
+            if risk_values.get(key) is not None
+        }
+        active_weight_total = sum(term["weight"] for term in active_terms.values())
+        weighted_sum = sum(term["weighted_value"] for term in active_terms.values())
+        delayed = is_delayed(op_risk_score, delay_threshold)
+
+        log.info(
+            "m3_risk_calculation job_id=%s operation_id=%s operation_name=%s "
+            "expected_minutes=%s actual_minutes=%s job_quantity=%s done_quantity=%s "
+            "predicted_overrun_hours=%s signals=%s active_terms=%s weighted_sum=%s "
+            "active_weight_total=%s risk_score=%s delay_threshold=%s is_delayed=%s",
+            job_rollup.get("job_id"),
+            op.get("operation_id"),
+            op.get("operation_name"),
+            op.get("expected_duration_minutes"),
+            op.get("actual_duration_minutes"),
+            op.get("job_quantity"),
+            op.get("current_done_quantity"),
+            op_predicted_overrun,
+            risk_values,
+            active_terms,
+            weighted_sum,
+            active_weight_total,
+            op_risk_score,
+            delay_threshold,
+            delayed,
         )
 
         enriched_ops.append({
             **op,
             "components": enriched_components,
             "time_overrun_ratio": op_time_overrun,
-            "predicted_overrun_hours": predicted_overrun_hours(op),
+            "predicted_overrun_hours": op_predicted_overrun,
             "predecessor_time_overrun_ratio": predecessor_time_overrun_ratio(
                 op, time_overrun_ratio_by_operation_id,
             ),
             "operator_pace_ratio": op_operator_pace,
             "material_shortfall_ratio": op_material_shortfall,
             "composite_risk_score": op_risk_score,
-            "is_delayed": is_delayed(op_risk_score, delay_threshold),
+            "is_delayed": delayed,
         })
 
     return {**job_rollup, "operations": enriched_ops}

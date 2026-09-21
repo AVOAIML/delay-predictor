@@ -98,6 +98,16 @@ def review_job(
     the number of calls this loop can spend is stated in exactly one place.
     """
     pack = build_evidence(job, weights, threshold)
+    log.info(
+        "m3_review_evidence job_id=%s risk_score=%s overrun_hours=%s "
+        "is_delayed=%s threshold=%s scorable_operations=%d",
+        pack.job_id,
+        pack.summary_risk_score,
+        pack.summary_overrun_hours,
+        pack.summary_is_delayed,
+        pack.delay_threshold,
+        len(pack.scorable_operations),
+    )
 
     if not pack.scorable_operations:
         # Nothing in this job has enough logged progress to attribute a cause
@@ -114,6 +124,12 @@ def review_job(
         )
 
     draft = compose(pack)
+    log.info(
+        "m3_review_composition job_id=%s candidate_lines=%d signals=%s",
+        pack.job_id,
+        len(draft.why_lines),
+        [line.signal_key for line in draft.why_lines],
+    )
     issues = pack.issues + tuple(validate(pack, draft))
     if has_errors(issues):
         return _insight(
@@ -132,6 +148,18 @@ def review_job(
     for attempt in range(1, max_attempts + 1):
         attempts = attempt
         verdict = agent.judge(pack, judged, withdrawn=withdrawn)
+        log.info(
+            "m3_review_judge job_id=%s attempt=%d candidate_lines=%d approved=%s "
+            "skipped=%s unsupported_indices=%s omitted_signals=%s parse_error=%s",
+            pack.job_id,
+            attempt,
+            len(judged.why_lines),
+            verdict.approved,
+            verdict.skipped,
+            verdict.unsupported_indices,
+            verdict.omitted_signals,
+            verdict.parse_error,
+        )
         if verdict.approved:
             break
         unsupported = set(verdict.unsupported_indices)

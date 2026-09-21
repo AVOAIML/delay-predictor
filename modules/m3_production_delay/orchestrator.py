@@ -214,7 +214,19 @@ class ProductionDelayOrchestrator:
         the rule engine itself never depends on the Weight Agent's types.
         """
         result = self.resolve_weights(request)
-        return weights_bp_to_risk_weights(result.weights_bp)
+        risk_weights = weights_bp_to_risk_weights(result.weights_bp)
+        log.info(
+            "m3_weight_resolution tenant_id=%s source=%s status=%s weights_bp=%s "
+            "risk_weights=%s excluded_signals=%s fallback_reasons=%s",
+            request.tenant_id,
+            result.source,
+            result.status,
+            result.weights_bp,
+            risk_weights,
+            [excluded.signal for excluded in result.excluded_signals],
+            result.fallback_reasons,
+        )
+        return risk_weights
 
     def review_jobs(
         self,
