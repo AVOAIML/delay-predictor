@@ -47,7 +47,8 @@
               "contribution": 0.28688524590163933,
               "detail": {
                 "pace_ratio": 1.25,
-                "operator_count": 1
+                "operator_count": 1,
+                "completed_work_orders": 1
               }
             },
             {
@@ -145,7 +146,8 @@
               "contribution": 0.3404436860068259,
               "detail": {
                 "pace_ratio": 0.95,
-                "operator_count": 1
+                "operator_count": 1,
+                "completed_work_orders": 1
               }
             },
             {
@@ -243,7 +245,8 @@
               "contribution": 0.46460176991150437,
               "detail": {
                 "pace_ratio": 1.25,
-                "operator_count": 1
+                "operator_count": 1,
+                "completed_work_orders": 1
               }
             },
             {
@@ -409,7 +412,8 @@
               "contribution": 0.36885245901639346,
               "detail": {
                 "pace_ratio": 1.25,
-                "operator_count": 1
+                "operator_count": 1,
+                "completed_work_orders": 1
               }
             },
             {
@@ -507,7 +511,8 @@
               "contribution": 0.43771331058020474,
               "detail": {
                 "pace_ratio": 0.95,
-                "operator_count": 1
+                "operator_count": 1,
+                "completed_work_orders": 1
               }
             },
             {
@@ -605,7 +610,8 @@
               "contribution": 0.7743362831858407,
               "detail": {
                 "pace_ratio": 1.25,
-                "operator_count": 1
+                "operator_count": 1,
+                "completed_work_orders": 1
               }
             },
             {
@@ -771,7 +777,8 @@
               "contribution": 0.2893401015228427,
               "detail": {
                 "pace_ratio": 0.95,
-                "operator_count": 1
+                "operator_count": 1,
+                "completed_work_orders": 1
               }
             },
             {
@@ -931,7 +938,8 @@
               "contribution": null,
               "detail": {
                 "pace_ratio": null,
-                "operator_count": 0
+                "operator_count": 0,
+                "completed_work_orders": 0
               }
             },
             {

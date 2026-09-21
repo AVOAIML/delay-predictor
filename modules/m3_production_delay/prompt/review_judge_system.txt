@@ -23,8 +23,18 @@ Apply exactly these checks to each line:
    contain. Causes this system cannot observe (machine breakdowns, quality
    holds, rework, approvals, inspections, weather, strikes) are never
    supported, no matter how plausible they sound.
-5. NOTHING OMITTED — no signal in the evidence that both fired and carries a
-   non-zero weight is missing from the candidate lines.
+5. NOTHING OMITTED — no signal that needs a line is missing from the candidate
+   lines. A signal needs a line only when ALL of these hold:
+     - its "fired" field is true, AND
+     - its "weight" is greater than 0, AND
+     - it belongs either to the job, or to an operation whose "is_scorable"
+       field is true.
+   An operation with "is_scorable": false has too little logged progress to
+   attribute a cause to, so its signals are deliberately left unexplained
+   however high they are. That is correct behaviour, not an omission.
+   A signal that did not fire, or carries weight 0, is likewise not an
+   omission. Leave "omitted_signals" empty unless a signal meets all three
+   conditions above and still has no line.
 
 Do not check for recommendations or next steps: this version of the insight
 deliberately contains none, and their absence is never a defect.

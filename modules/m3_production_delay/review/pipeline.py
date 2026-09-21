@@ -124,14 +124,22 @@ def review_job(
     verdict = JudgeVerdict(approved=False, skipped=True)
     attempts = 0
     max_attempts = agent.config.max_attempts
+    # Signals whose lines this judge asked to have removed. Passed back to it
+    # on the re-judge, because every line the composer emits is for a fired,
+    # weighted signal — so dropping one would otherwise trip the judge's own
+    # "nothing omitted" check and make the second verdict fail by construction.
+    withdrawn: tuple[str, ...] = ()
     for attempt in range(1, max_attempts + 1):
         attempts = attempt
-        verdict = agent.judge(pack, judged)
+        verdict = agent.judge(pack, judged, withdrawn=withdrawn)
         if verdict.approved:
             break
         unsupported = set(verdict.unsupported_indices)
         if not unsupported or attempt == max_attempts:
             break
+        withdrawn += tuple(
+            line.signal_key for line in judged.why_lines if line.index in unsupported
+        )
         kept = tuple(line for line in judged.why_lines if line.index not in unsupported)
         issues += (
             Issue(

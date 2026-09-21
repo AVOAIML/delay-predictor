@@ -371,3 +371,28 @@ def test_a_truncated_verdict_still_fails(pack, draft):
 
     assert verdict.approved is False
     assert "invalid_json" in verdict.parse_error
+
+
+# ─── the re-judge has to be answerable ───────────────────────────────────────
+
+
+def test_the_re_judge_is_told_what_it_already_withdrew(pack, draft):
+    """Without this the retry cannot succeed. Every composed line is for a
+    fired, weighted signal, so dropping one at the judge's request violates its
+    own "nothing omitted" check — and the second verdict then refuses the draft
+    for an absence it caused. Observed against a real deployment."""
+    agent, provider = _agent(_approve(len(draft.why_lines) - 1))
+    agent.judge(
+        pack, draft.with_lines(draft.why_lines[:-1]), withdrawn=("supplier_reliability",)
+    )
+
+    prompt = provider.calls[0]
+    assert "WITHDRAWN AT YOUR REQUEST" in prompt
+    assert "supplier_reliability" in prompt
+    assert "NOT an omission" in prompt
+
+
+def test_the_first_pass_carries_no_withdrawal_note(pack, draft):
+    agent, provider = _agent(_approve(len(draft.why_lines)))
+    agent.judge(pack, draft)
+    assert "WITHDRAWN" not in provider.calls[0]

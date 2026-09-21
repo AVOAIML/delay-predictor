@@ -161,6 +161,27 @@ def is_scorable(op: dict) -> bool:
     return ratio >= SCORING_GATE_MIN_TIME_RATIO
 
 
+def operator_history_depth(op: dict) -> int:
+    """How many completed work orders the operator pace was averaged over.
+
+    Mirrors ``elements._r_for_operator``'s own filter — a work order counts
+    only once it has completed and has a scheduled duration to compare
+    against. Carried into the evidence because the line built on this signal
+    says "over recent completed jobs", and a judge reading a bare
+    ``pace_ratio`` has no way to tell whether any such jobs exist. A claim the
+    evidence cannot substantiate is one this pipeline should not be making.
+    """
+    completed = 0
+    for operator in op.get("operators") or []:
+        for work_order in operator.get("last_10_work_orders") or []:
+            if work_order.get("completed_on") is None:
+                continue
+            if not work_order.get("scheduled_time_minutes"):
+                continue
+            completed += 1
+    return completed
+
+
 def operation_label(op: dict) -> str:
     """A human-readable subject for a line.
 
@@ -367,6 +388,10 @@ def _operation_evidence(
         SIGNAL_OPERATOR_PACE: {
             "pace_ratio": operator_pace,
             "operator_count": op.get("operator_count"),
+            # What "over recent completed jobs" actually rests on. Without it
+            # the pace is an unsourced number and the line's wording is a claim
+            # the evidence cannot back.
+            "completed_work_orders": operator_history_depth(op),
         },
         SIGNAL_MATERIAL_SHORTFALL: {
             "short_components": [c.to_dict() for c in short_components],

@@ -244,3 +244,24 @@ def test_the_adapter_needs_no_sdk():
     assert "import openai" not in source
     assert "import anthropic" not in source
     assert "urllib" in source
+
+
+# ─── the suite must never reach a paid API ───────────────────────────────────
+
+
+def test_the_session_guard_pins_the_provider_to_the_stub():
+    """Regression for a real incident: with credentials in .env.local, a bare
+    `ReviewAgent()` in a test made a live billable call. tests/conftest.py now
+    pins the provider for the whole session."""
+    from maxxflow_core.settings import get_settings
+
+    get_settings.cache_clear()
+    settings = get_settings()
+
+    assert settings.llm_provider == "stub"
+    assert settings.azure_ai_api_key.get_secret_value() == ""
+    assert settings.azure_ai_api_base == ""
+
+
+def test_a_provider_built_from_configuration_is_the_stub():
+    assert isinstance(get_llm_provider(), StubLLMProvider)

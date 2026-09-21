@@ -84,7 +84,29 @@ def render_candidate_lines(draft: "InsightDraft") -> str:
     return "\n".join(rendered)
 
 
-def build_user_prompt(pack: "EvidencePack", draft: "InsightDraft") -> str:
+def render_withdrawn_note(withdrawn: tuple[str, ...]) -> str:
+    """Tell the judge which signals' lines IT asked to have removed.
+
+    Without this the retry cannot succeed. Every line the composer emits is
+    for a signal that fired and carries weight, so dropping one at the judge's
+    request immediately violates the prompt's own "nothing omitted" check —
+    the second verdict then refuses the draft for the absence it just caused.
+    Naming the withdrawn signals turns the re-judge into a question that can
+    actually be answered yes.
+    """
+    if not withdrawn:
+        return ""
+    names = ", ".join(sorted(withdrawn))
+    return (
+        "\nWITHDRAWN AT YOUR REQUEST (a previous pass judged these unsupported,\n"
+        f"so their lines were removed): {names}\n"
+        "Their absence is NOT an omission — do not report them in omitted_signals.\n"
+    )
+
+
+def build_user_prompt(
+    pack: "EvidencePack", draft: "InsightDraft", withdrawn: tuple[str, ...] = ()
+) -> str:
     """Evidence pack plus indexed candidate lines. ``allow_nan=False`` so a
     non-finite number can never reach the model as a bare ``Infinity``
     literal, which is not JSON it could be expected to read."""
@@ -104,6 +126,7 @@ def build_user_prompt(pack: "EvidencePack", draft: "InsightDraft") -> str:
         evidence_json=evidence_json,
         fire_baselines=baselines,
         candidate_lines=render_candidate_lines(draft),
+        withdrawn_note=render_withdrawn_note(withdrawn),
     )
 
 
@@ -251,9 +274,15 @@ class ReviewAgent:
         pack: "EvidencePack",
         draft: "InsightDraft",
         *,
+        withdrawn: tuple[str, ...] = (),
         tracer: ReviewAgentTracer = NOOP_TRACER,
     ) -> JudgeVerdict:
         """Judge one draft against its evidence.
+
+        ``withdrawn`` names signals whose lines a previous pass removed because
+        this judge would not support them; their absence is then not reported
+        as an omission. See :func:`render_withdrawn_note` for why a re-judge
+        without it cannot succeed.
 
         Returns an approved, ``skipped`` verdict without calling anything when
         there are no candidate lines — there is nothing to judge, and a call
@@ -272,7 +301,7 @@ class ReviewAgent:
         generation_config = GenerationConfig(
             temperature=self._config.temperature, seed=self._config.seed
         )
-        user_prompt = build_user_prompt(pack, draft)
+        user_prompt = build_user_prompt(pack, draft, withdrawn)
         provider = self._resolve_llm_provider()
         provider_name = getattr(provider, "name", type(provider).__name__)
 

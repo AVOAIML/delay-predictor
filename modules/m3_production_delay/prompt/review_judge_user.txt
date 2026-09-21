@@ -7,6 +7,6 @@ $fire_baselines
 
 CANDIDATE LINES:
 $candidate_lines
-
+$withdrawn_note
 Judge every candidate line above against the evidence pack. Respond with the
 JSON verdict object only.

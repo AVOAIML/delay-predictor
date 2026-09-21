@@ -328,3 +328,23 @@ def test_one_failing_job_does_not_affect_the_next(section1_job, weights, thresho
     assert insights[0].status == STATUS_SUPPRESSED_NOT_SCORABLE
     assert insights[1].status == STATUS_APPROVED_WITH_WARNINGS
     assert len(insights[1].why_lines) == 4
+
+
+def test_the_retry_names_the_dropped_signal_to_the_judge(section1_job, weights, threshold):
+    """The pipeline must tell the second pass which signals it withdrew, or the
+    re-judge is unanswerable — see test_review_agent for why."""
+    seen: list[tuple[str, ...]] = []
+
+    class Recording(ReviewAgent):
+        def judge(self, pack, draft, *, withdrawn=(), tracer=None):
+            seen.append(withdrawn)
+            return super().judge(pack, draft, withdrawn=withdrawn)
+
+    agent = rejecting_once_agent(0)
+    recorder = Recording(llm_provider=agent._llm_provider, config=agent.config)
+    insight = review_job(section1_job, weights, threshold, recorder)
+
+    assert len(seen) == 2, "one judging call, then one re-judge"
+    assert seen[0] == (), "the first pass has nothing to declare"
+    assert seen[1], "the re-judge is told which signal's line was withdrawn"
+    assert insight.status == STATUS_APPROVED_WITH_WARNINGS
