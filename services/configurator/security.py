@@ -36,7 +36,15 @@ ROLLBACK_PERMISSION = "ml-models:rollback"
 DELETE_PERMISSION = "ml-models:delete"
 
 _SAFE_SCHEMA = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
-_TENANT_PATH = re.compile(r"^/api/([^/]+)/(?:models(?:/|$)|inventory-dashboard(?:/|$))")
+# Every tenant-scoped path prefix must be listed here, or `authenticate_request`
+# authorizes the caller for their x-tenant-slug and then never checks that the
+# TENANT IN THE PATH is the same one — letting a member of tenant A read tenant
+# B by changing the URL. A route that reads or writes tenant data and is not
+# matched by this pattern is a cross-tenant leak, so add the prefix here in the
+# same commit that adds the route.
+_TENANT_PATH = re.compile(
+    r"^/api/([^/]+)/(?:models(?:/|$)|inventory-dashboard(?:/|$)|delay-insights(?:/|$))"
+)
 _SENSITIVE_PATHS = (
     (re.compile(r"^/api/[^/]+/models/[^/]+/train/?$"), "POST", TRAIN_PERMISSION),
     (re.compile(r"^/api/[^/]+/models/[^/]+/publish/?$"), "POST", PUBLISH_PERMISSION),

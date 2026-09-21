@@ -158,6 +158,14 @@ class Settings(BaseSettings):
     azure_openai_api_key: SecretStr = Field(default=SecretStr(""), alias="AZURE_OPENAI_API_KEY")
     azure_openai_endpoint: str = Field(default="", alias="AZURE_OPENAI_ENDPOINT")
     azure_openai_api_version: str = Field(default="", alias="AZURE_OPENAI_API_VERSION")
+    # Azure AI Foundry (LLM_PROVIDER=azure_ai) — a DIFFERENT data plane from
+    # Azure OpenAI above, with its own credentials. Foundry is where the
+    # non-OpenAI catalogue (Anthropic Claude among it) is served, so a Claude
+    # deployment is unreachable through AZURE_OPENAI_* no matter how the
+    # endpoint is spelled. LLM_MODEL_ID holds the DEPLOYMENT name chosen at
+    # deploy time, not a vendor model name, and is never guessed here.
+    azure_ai_api_key: SecretStr = Field(default=SecretStr(""), alias="AZURE_AI_API_KEY")
+    azure_ai_api_base: str = Field(default="", alias="AZURE_AI_API_BASE")
 
     # --- secrets / determinism ------------------------------------------------
     # Operator UUIDs are PII; HMAC(salt)->tier in the DAL before bronze. The salt
@@ -226,6 +234,20 @@ class Settings(BaseSettings):
     m3_weight_trace_enabled: bool = Field(default=False, alias="M3_WEIGHT_AGENT_TRACE_ENABLED")
     m3_weight_trace_include_content: bool = Field(
         default=False, alias="M3_WEIGHT_AGENT_TRACE_INCLUDE_CONTENT"
+    )
+
+    # --- M3 review agent --------------------------------------------------------
+    # LLM-as-a-judge over the composed delay insight (modules/m3_production_delay/
+    # llm_agents/review_agent). Off => the deterministic template lines are
+    # published unjudged (status "fallback_template"), exactly as an
+    # unreachable or unreadable judge already degrades.
+    m3_review_llm_enabled: bool = Field(default=True, alias="M3_REVIEW_AGENT_LLM_ENABLED")
+    # Same two-switch trace contract as the Weight Agent above: the second
+    # flag is the ONLY path through which the judge's raw prompt or raw
+    # response text is ever emitted.
+    m3_review_trace_enabled: bool = Field(default=False, alias="M3_REVIEW_AGENT_TRACE_ENABLED")
+    m3_review_trace_include_content: bool = Field(
+        default=False, alias="M3_REVIEW_AGENT_TRACE_INCLUDE_CONTENT"
     )
 
     def tenant_schema(self, tenant_slug: str | None = None) -> str:

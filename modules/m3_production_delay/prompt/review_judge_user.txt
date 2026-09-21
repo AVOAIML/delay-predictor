@@ -1,0 +1,12 @@
+EVIDENCE PACK (the only facts you may use):
+$evidence_json
+
+FIRE BASELINES (a signal fired when its value is strictly greater than its
+baseline):
+$fire_baselines
+
+CANDIDATE LINES:
+$candidate_lines
+$withdrawn_note
+Judge every candidate line above against the evidence pack. Respond with the
+JSON verdict object only.

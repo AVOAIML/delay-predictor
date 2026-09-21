@@ -56,3 +56,15 @@ modules/m5_scheduling
 
 frontend
 CLAUDE.md
+
+# Local-only developer tooling: kept on disk, deliberately not committed.
+# Listed here rather than merely untracked so a `git add -A` cannot quietly
+# put them back — including the Postman environment, which carries a real
+# bearer token.
+compose.local.yml
+.env.local.example
+postman/
+scripts/seed_m3_demo.py
+scripts/dev_auth.py
+scripts/probe_foundry.py
+scripts/check_llm.py

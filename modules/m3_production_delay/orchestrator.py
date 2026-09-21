@@ -2,11 +2,25 @@
 
 Thin composition boundary between a caller (a future Configurator endpoint,
 this module's own CLI runner below, or eventually the rule/risk engines) and
-the Weight Agent (``llm_agents/weight_agent/``). Owns no statistical logic of
-its own: weight validation, history-floor computation, shrinkage, projection,
-LLM profile extraction/adjustment, and fitted-weight compatibility all remain
-inside the Weight Agent package. This module only builds a request, calls
-``WeightAgent.resolve()``, and returns its result unchanged.
+this module's LLM agents (``llm_agents/``). Owns no statistical logic and no
+IO of its own — it builds a request, calls an agent, and returns the result
+unchanged.
+
+Two agents are composed here:
+
+* **Weight Agent** (``llm_agents/weight_agent/``) — resolves the tenant's
+  risk-signal weight vector. Weight validation, history-floor computation,
+  shrinkage, projection, LLM profile extraction/adjustment and fitted-weight
+  compatibility all remain inside that package.
+* **Review Agent** (``llm_agents/review_agent/``) — judges whether each
+  composed delay-insight line is supported by the Risk Engine's evidence.
+  Evidence building, line composition, the deterministic validators and the
+  writeback remain inside ``review/``; this class only hands the agent to the
+  review pipeline.
+
+Both take the same optional ``llm_provider``, so one injected provider covers
+every LLM call M3 makes — which is what lets a test drive the whole module
+with a scripted provider and no network.
 
 Naming note: this file was named ``occustrator.py`` in early scaffolding — a
 one-line placeholder comment, never committed to git history and never
@@ -30,12 +44,14 @@ import os
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from maxxflow_core.errors import get_logger
 from maxxflow_core.ports import GenerationConfig, LLMProvider
 from maxxflow_core.settings import get_settings
 
+from m3_production_delay.llm_agents.review_agent.config import ReviewAgentConfig
+from m3_production_delay.llm_agents.review_agent.resolver import ReviewAgent
 from m3_production_delay.llm_agents.weight_agent.config import WeightAgentConfig
 from m3_production_delay.llm_agents.weight_agent.exceptions import AllSignalsUnavailableError
 from m3_production_delay.llm_agents.weight_agent.models import (
@@ -50,6 +66,10 @@ from m3_production_delay.llm_agents.weight_agent.resolver import WeightAgent
 from m3_production_delay.llm_agents.weight_agent.tracing import WeightAgentTracer
 from m3_production_delay.rule_engine.elements import weights_bp_to_risk_weights
 from m3_production_delay.tenant_context_reader import TenantContextReader
+
+if TYPE_CHECKING:  # review/ imports this module inside a function, never at
+    # import time — keeping the annotation import-only preserves that.
+    from m3_production_delay.review.schemas import ValidatedInsight
 
 log = get_logger("m3_production_delay.orchestrator")
 
@@ -88,13 +108,15 @@ class WeightAgentRequest:
 
 
 class ProductionDelayOrchestrator:
-    """Composes the Weight Agent for the M3 module.
+    """Composes the M3 agents.
 
     Configured-weight priority, availability handling, historical blending,
     fitted-weight bounds projection, and the two-stage LLM cold start are all
     the Weight Agent's own responsibility (spec §4) — this class never
     reimplements or shortcuts any of it, and never persists a recommendation
-    as approved tenant configuration.
+    as approved tenant configuration. The same restraint applies to the
+    Review Agent: this class hands it to the review pipeline and returns what
+    comes back, and never writes, reorders or vets an explanation line itself.
     """
 
     def __init__(
@@ -104,11 +126,24 @@ class ProductionDelayOrchestrator:
         llm_provider: LLMProvider | None = None,
         config: WeightAgentConfig | None = None,
         tenant_context_reader: TenantContextReader | None = None,
+        review_agent: ReviewAgent | None = None,
+        review_config: ReviewAgentConfig | None = None,
     ) -> None:
         self._weight_agent = WeightAgent(
             fitted_provider=fitted_provider, llm_provider=llm_provider, config=config
         )
+        # Same llm_provider as the Weight Agent by default: one injected
+        # provider then covers every LLM call M3 makes. A fully-built
+        # `review_agent` still wins, for a caller that needs the two agents on
+        # different providers or configs.
+        self._review_agent = review_agent or ReviewAgent(
+            llm_provider=llm_provider, config=review_config
+        )
         self._tenant_context_reader = tenant_context_reader or TenantContextReader()
+
+    @property
+    def review_agent(self) -> ReviewAgent:
+        return self._review_agent
 
     def resolve_weights(self, request: WeightAgentRequest) -> WeightResolution:
         """Returns the Weight Agent's ``WeightResolution`` unchanged.
@@ -180,6 +215,40 @@ class ProductionDelayOrchestrator:
         """
         result = self.resolve_weights(request)
         return weights_bp_to_risk_weights(result.weights_bp)
+
+    def review_jobs(
+        self,
+        scored_jobs: list[dict],
+        *,
+        weights: dict[str, float],
+        threshold: float,
+    ) -> "list[ValidatedInsight]":
+        """Runs the Review Agent over already-scored jobs and returns one
+        :class:`ValidatedInsight` per job.
+
+        ``scored_jobs`` is ``calculate_delay_elements_for_jobs()``'s output,
+        ``weights`` the vector that produced those scores (so an explanation
+        can never be attributed against a different weighting than the one
+        scored), and ``threshold`` the tenant's delay cutoff — required, since
+        the same composite score means different things per tenant and there
+        is no calibrated default anywhere in M3.
+
+        No IO happens here: reading the tenant, rolling up and writing the
+        advisory back all belong to ``review/pipeline.py``, the same way this
+        class never reads a tenant to resolve weights.
+        """
+        from m3_production_delay.review.pipeline import review_jobs as _review_jobs
+
+        log.info(
+            "m3_orchestrator operation=review_jobs jobs=%d threshold=%s stage=start",
+            len(scored_jobs),
+            threshold,
+        )
+        insights = _review_jobs(scored_jobs, weights, threshold, self._review_agent)
+        log.info(
+            "m3_orchestrator operation=review_jobs jobs=%d stage=done", len(insights)
+        )
+        return insights
 
 
 # ---------------------------------------------------------------------------

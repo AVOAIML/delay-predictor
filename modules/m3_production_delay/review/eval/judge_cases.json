@@ -1,0 +1,2099 @@
+{
+  "version": 1,
+  "threshold": 1.0,
+  "scenarios": {
+    "full_job": {
+      "job_id": "WH/MO/00142",
+      "delay_threshold": 1.0,
+      "weights": {
+        "time_overrun_ratio": 0.4,
+        "operator_pace_ratio": 0.3,
+        "material_shortfall_ratio": 0.15,
+        "supplier_reliability": 0.05
+      },
+      "operations": [
+        {
+          "operation_id": "wo-cutting-0001",
+          "operation_name": "INDEPENDENT \u00b7 wo-cutti",
+          "status": "IN_PROGRESS",
+          "expected_duration_minutes": 480.0,
+          "actual_duration_minutes": 600.0,
+          "job_quantity": 100.0,
+          "current_done_quantity": 60.0,
+          "composite_risk_score": 1.4523809523809523,
+          "is_delayed": true,
+          "predicted_overrun_hours": 8.666666666666666,
+          "overrun_basis": "quantity",
+          "signals": [
+            {
+              "key": "time_overrun_ratio",
+              "value": 1.25,
+              "weight": 0.4,
+              "fired": true,
+              "contribution": 0.3825136612021858,
+              "detail": {
+                "actual_minutes": 600.0,
+                "expected_minutes": 480.0,
+                "actual_hrs": 10.0,
+                "expected_hrs": 8.0,
+                "delta_hrs": 2.0
+              }
+            },
+            {
+              "key": "operator_pace_ratio",
+              "value": 1.25,
+              "weight": 0.3,
+              "fired": true,
+              "contribution": 0.28688524590163933,
+              "detail": {
+                "pace_ratio": 1.25,
+                "operator_count": 1,
+                "completed_work_orders": 1
+              }
+            },
+            {
+              "key": "material_shortfall_ratio",
+              "value": 2.5,
+              "weight": 0.15,
+              "fired": true,
+              "contribution": 0.28688524590163933,
+              "detail": {
+                "short_components": [
+                  {
+                    "component_id": "item-steel-plate",
+                    "name": "Steel Plate 12mm",
+                    "required_quantity": 100.0,
+                    "available_quantity": 40.0,
+                    "shortfall_quantity": 60.0,
+                    "vendor_name": "Lanka Steel",
+                    "vendor_lead_time_ratio": 1.5
+                  }
+                ]
+              }
+            },
+            {
+              "key": "supplier_reliability",
+              "value": 1.1428571428571428,
+              "weight": 0.05,
+              "fired": true,
+              "contribution": 0.04371584699453552,
+              "detail": {
+                "vendor_names": [
+                  "Colombo Fasteners",
+                  "Lanka Steel"
+                ],
+                "mean_lead_time_ratio": 1.1428571428571428
+              }
+            },
+            {
+              "key": "predecessor_time_overrun_ratio",
+              "value": null,
+              "weight": 0.0,
+              "fired": false,
+              "contribution": null,
+              "detail": {
+                "ratio": null,
+                "predecessor_operation_ids": []
+              }
+            }
+          ],
+          "components_short": [
+            {
+              "component_id": "item-steel-plate",
+              "name": "Steel Plate 12mm",
+              "required_quantity": 100.0,
+              "available_quantity": 40.0,
+              "shortfall_quantity": 60.0,
+              "vendor_name": "Lanka Steel",
+              "vendor_lead_time_ratio": 1.5
+            }
+          ],
+          "depends_on_operation_ids": [],
+          "is_scorable": true
+        },
+        {
+          "operation_id": "wo-welding-0002",
+          "operation_name": "INDEPENDENT \u00b7 wo-weldi",
+          "status": "IN_PROGRESS",
+          "expected_duration_minutes": 300.0,
+          "actual_duration_minutes": 90.0,
+          "job_quantity": 100.0,
+          "current_done_quantity": 35.0,
+          "composite_risk_score": 0.9301587301587302,
+          "is_delayed": false,
+          "predicted_overrun_hours": -0.7142857142857139,
+          "overrun_basis": "quantity",
+          "signals": [
+            {
+              "key": "time_overrun_ratio",
+              "value": 0.3,
+              "weight": 0.4,
+              "fired": false,
+              "contribution": 0.14334470989761092,
+              "detail": {
+                "actual_minutes": 90.0,
+                "expected_minutes": 300.0,
+                "actual_hrs": 1.5,
+                "expected_hrs": 5.0,
+                "delta_hrs": -3.5
+              }
+            },
+            {
+              "key": "operator_pace_ratio",
+              "value": 0.95,
+              "weight": 0.3,
+              "fired": false,
+              "contribution": 0.3404436860068259,
+              "detail": {
+                "pace_ratio": 0.95,
+                "operator_count": 1,
+                "completed_work_orders": 1
+              }
+            },
+            {
+              "key": "material_shortfall_ratio",
+              "value": 2.5,
+              "weight": 0.15,
+              "fired": true,
+              "contribution": 0.44795221843003413,
+              "detail": {
+                "short_components": [
+                  {
+                    "component_id": "item-steel-plate",
+                    "name": "Steel Plate 12mm",
+                    "required_quantity": 100.0,
+                    "available_quantity": 40.0,
+                    "shortfall_quantity": 60.0,
+                    "vendor_name": "Lanka Steel",
+                    "vendor_lead_time_ratio": 1.5
+                  }
+                ]
+              }
+            },
+            {
+              "key": "supplier_reliability",
+              "value": 1.1428571428571428,
+              "weight": 0.05,
+              "fired": true,
+              "contribution": 0.068259385665529,
+              "detail": {
+                "vendor_names": [
+                  "Colombo Fasteners",
+                  "Lanka Steel"
+                ],
+                "mean_lead_time_ratio": 1.1428571428571428
+              }
+            },
+            {
+              "key": "predecessor_time_overrun_ratio",
+              "value": null,
+              "weight": 0.0,
+              "fired": false,
+              "contribution": null,
+              "detail": {
+                "ratio": null,
+                "predecessor_operation_ids": []
+              }
+            }
+          ],
+          "components_short": [
+            {
+              "component_id": "item-steel-plate",
+              "name": "Steel Plate 12mm",
+              "required_quantity": 100.0,
+              "available_quantity": 40.0,
+              "shortfall_quantity": 60.0,
+              "vendor_name": "Lanka Steel",
+              "vendor_lead_time_ratio": 1.5
+            }
+          ],
+          "depends_on_operation_ids": [],
+          "is_scorable": true
+        },
+        {
+          "operation_id": "wo-assembly-0003",
+          "operation_name": "DEPENDENT \u00b7 wo-assem",
+          "status": "NOT_STARTED",
+          "expected_duration_minutes": 240.0,
+          "actual_duration_minutes": null,
+          "job_quantity": 100.0,
+          "current_done_quantity": 0.0,
+          "composite_risk_score": 1.6142857142857145,
+          "is_delayed": true,
+          "predicted_overrun_hours": 1.0,
+          "overrun_basis": "operator_pace",
+          "signals": [
+            {
+              "key": "time_overrun_ratio",
+              "value": null,
+              "weight": 0.4,
+              "fired": false,
+              "contribution": null,
+              "detail": {
+                "actual_minutes": null,
+                "expected_minutes": 240.0,
+                "actual_hrs": null,
+                "expected_hrs": 4.0,
+                "delta_hrs": null
+              }
+            },
+            {
+              "key": "operator_pace_ratio",
+              "value": 1.25,
+              "weight": 0.3,
+              "fired": true,
+              "contribution": 0.46460176991150437,
+              "detail": {
+                "pace_ratio": 1.25,
+                "operator_count": 1,
+                "completed_work_orders": 1
+              }
+            },
+            {
+              "key": "material_shortfall_ratio",
+              "value": 2.5,
+              "weight": 0.15,
+              "fired": true,
+              "contribution": 0.46460176991150437,
+              "detail": {
+                "short_components": [
+                  {
+                    "component_id": "item-steel-plate",
+                    "name": "Steel Plate 12mm",
+                    "required_quantity": 100.0,
+                    "available_quantity": 40.0,
+                    "shortfall_quantity": 60.0,
+                    "vendor_name": "Lanka Steel",
+                    "vendor_lead_time_ratio": 1.5
+                  }
+                ]
+              }
+            },
+            {
+              "key": "supplier_reliability",
+              "value": 1.1428571428571428,
+              "weight": 0.05,
+              "fired": true,
+              "contribution": 0.07079646017699114,
+              "detail": {
+                "vendor_names": [
+                  "Colombo Fasteners",
+                  "Lanka Steel"
+                ],
+                "mean_lead_time_ratio": 1.1428571428571428
+              }
+            },
+            {
+              "key": "predecessor_time_overrun_ratio",
+              "value": 1.25,
+              "weight": 0.0,
+              "fired": true,
+              "contribution": null,
+              "detail": {
+                "ratio": 1.25,
+                "predecessor_operation_ids": [
+                  "wo-cutting-0001"
+                ]
+              }
+            }
+          ],
+          "components_short": [
+            {
+              "component_id": "item-steel-plate",
+              "name": "Steel Plate 12mm",
+              "required_quantity": 100.0,
+              "available_quantity": 40.0,
+              "shortfall_quantity": 60.0,
+              "vendor_name": "Lanka Steel",
+              "vendor_lead_time_ratio": 1.5
+            }
+          ],
+          "depends_on_operation_ids": [
+            "wo-cutting-0001"
+          ],
+          "is_scorable": false
+        }
+      ],
+      "material_overrun": [
+        {
+          "component_id": "item-steel-plate",
+          "name": "Steel Plate 12mm",
+          "required_quantity": 100.0,
+          "available_quantity": 40.0,
+          "shortfall_quantity": 60.0,
+          "vendor_name": "Lanka Steel",
+          "vendor_lead_time_ratio": 1.5
+        }
+      ],
+      "job_signals": [
+        {
+          "key": "material_shortfall_ratio",
+          "value": 2.5,
+          "weight": 0.15,
+          "fired": true,
+          "contribution": 0.28688524590163933,
+          "detail": {
+            "short_components": [
+              {
+                "component_id": "item-steel-plate",
+                "name": "Steel Plate 12mm",
+                "required_quantity": 100.0,
+                "available_quantity": 40.0,
+                "shortfall_quantity": 60.0,
+                "vendor_name": "Lanka Steel",
+                "vendor_lead_time_ratio": 1.5
+              }
+            ]
+          }
+        },
+        {
+          "key": "supplier_reliability",
+          "value": 1.1428571428571428,
+          "weight": 0.05,
+          "fired": true,
+          "contribution": 0.04371584699453552,
+          "detail": {
+            "vendor_names": [
+              "Colombo Fasteners",
+              "Lanka Steel"
+            ],
+            "mean_lead_time_ratio": 1.1428571428571428
+          }
+        }
+      ],
+      "summary_risk_score": 1.4523809523809523,
+      "summary_overrun_hours": 8.666666666666666,
+      "summary_is_delayed": true,
+      "summary_basis": "worst_operation",
+      "issues": []
+    },
+    "time_only_weights": {
+      "job_id": "WH/MO/00142",
+      "delay_threshold": 1.0,
+      "weights": {
+        "time_overrun_ratio": 0.4,
+        "operator_pace_ratio": 0.3,
+        "material_shortfall_ratio": 0.0,
+        "supplier_reliability": 0.0
+      },
+      "operations": [
+        {
+          "operation_id": "wo-cutting-0001",
+          "operation_name": "INDEPENDENT \u00b7 wo-cutti",
+          "status": "IN_PROGRESS",
+          "expected_duration_minutes": 480.0,
+          "actual_duration_minutes": 600.0,
+          "job_quantity": 100.0,
+          "current_done_quantity": 60.0,
+          "composite_risk_score": 1.4523809523809523,
+          "is_delayed": true,
+          "predicted_overrun_hours": 8.666666666666666,
+          "overrun_basis": "quantity",
+          "signals": [
+            {
+              "key": "time_overrun_ratio",
+              "value": 1.25,
+              "weight": 0.4,
+              "fired": true,
+              "contribution": 0.49180327868852464,
+              "detail": {
+                "actual_minutes": 600.0,
+                "expected_minutes": 480.0,
+                "actual_hrs": 10.0,
+                "expected_hrs": 8.0,
+                "delta_hrs": 2.0
+              }
+            },
+            {
+              "key": "operator_pace_ratio",
+              "value": 1.25,
+              "weight": 0.3,
+              "fired": true,
+              "contribution": 0.36885245901639346,
+              "detail": {
+                "pace_ratio": 1.25,
+                "operator_count": 1,
+                "completed_work_orders": 1
+              }
+            },
+            {
+              "key": "material_shortfall_ratio",
+              "value": 2.5,
+              "weight": 0.0,
+              "fired": true,
+              "contribution": null,
+              "detail": {
+                "short_components": [
+                  {
+                    "component_id": "item-steel-plate",
+                    "name": "Steel Plate 12mm",
+                    "required_quantity": 100.0,
+                    "available_quantity": 40.0,
+                    "shortfall_quantity": 60.0,
+                    "vendor_name": "Lanka Steel",
+                    "vendor_lead_time_ratio": 1.5
+                  }
+                ]
+              }
+            },
+            {
+              "key": "supplier_reliability",
+              "value": 1.1428571428571428,
+              "weight": 0.0,
+              "fired": true,
+              "contribution": null,
+              "detail": {
+                "vendor_names": [
+                  "Colombo Fasteners",
+                  "Lanka Steel"
+                ],
+                "mean_lead_time_ratio": 1.1428571428571428
+              }
+            },
+            {
+              "key": "predecessor_time_overrun_ratio",
+              "value": null,
+              "weight": 0.0,
+              "fired": false,
+              "contribution": null,
+              "detail": {
+                "ratio": null,
+                "predecessor_operation_ids": []
+              }
+            }
+          ],
+          "components_short": [
+            {
+              "component_id": "item-steel-plate",
+              "name": "Steel Plate 12mm",
+              "required_quantity": 100.0,
+              "available_quantity": 40.0,
+              "shortfall_quantity": 60.0,
+              "vendor_name": "Lanka Steel",
+              "vendor_lead_time_ratio": 1.5
+            }
+          ],
+          "depends_on_operation_ids": [],
+          "is_scorable": true
+        },
+        {
+          "operation_id": "wo-welding-0002",
+          "operation_name": "INDEPENDENT \u00b7 wo-weldi",
+          "status": "IN_PROGRESS",
+          "expected_duration_minutes": 300.0,
+          "actual_duration_minutes": 90.0,
+          "job_quantity": 100.0,
+          "current_done_quantity": 35.0,
+          "composite_risk_score": 0.9301587301587302,
+          "is_delayed": false,
+          "predicted_overrun_hours": -0.7142857142857139,
+          "overrun_basis": "quantity",
+          "signals": [
+            {
+              "key": "time_overrun_ratio",
+              "value": 0.3,
+              "weight": 0.4,
+              "fired": false,
+              "contribution": 0.18430034129692832,
+              "detail": {
+                "actual_minutes": 90.0,
+                "expected_minutes": 300.0,
+                "actual_hrs": 1.5,
+                "expected_hrs": 5.0,
+                "delta_hrs": -3.5
+              }
+            },
+            {
+              "key": "operator_pace_ratio",
+              "value": 0.95,
+              "weight": 0.3,
+              "fired": false,
+              "contribution": 0.43771331058020474,
+              "detail": {
+                "pace_ratio": 0.95,
+                "operator_count": 1,
+                "completed_work_orders": 1
+              }
+            },
+            {
+              "key": "material_shortfall_ratio",
+              "value": 2.5,
+              "weight": 0.0,
+              "fired": true,
+              "contribution": null,
+              "detail": {
+                "short_components": [
+                  {
+                    "component_id": "item-steel-plate",
+                    "name": "Steel Plate 12mm",
+                    "required_quantity": 100.0,
+                    "available_quantity": 40.0,
+                    "shortfall_quantity": 60.0,
+                    "vendor_name": "Lanka Steel",
+                    "vendor_lead_time_ratio": 1.5
+                  }
+                ]
+              }
+            },
+            {
+              "key": "supplier_reliability",
+              "value": 1.1428571428571428,
+              "weight": 0.0,
+              "fired": true,
+              "contribution": null,
+              "detail": {
+                "vendor_names": [
+                  "Colombo Fasteners",
+                  "Lanka Steel"
+                ],
+                "mean_lead_time_ratio": 1.1428571428571428
+              }
+            },
+            {
+              "key": "predecessor_time_overrun_ratio",
+              "value": null,
+              "weight": 0.0,
+              "fired": false,
+              "contribution": null,
+              "detail": {
+                "ratio": null,
+                "predecessor_operation_ids": []
+              }
+            }
+          ],
+          "components_short": [
+            {
+              "component_id": "item-steel-plate",
+              "name": "Steel Plate 12mm",
+              "required_quantity": 100.0,
+              "available_quantity": 40.0,
+              "shortfall_quantity": 60.0,
+              "vendor_name": "Lanka Steel",
+              "vendor_lead_time_ratio": 1.5
+            }
+          ],
+          "depends_on_operation_ids": [],
+          "is_scorable": true
+        },
+        {
+          "operation_id": "wo-assembly-0003",
+          "operation_name": "DEPENDENT \u00b7 wo-assem",
+          "status": "NOT_STARTED",
+          "expected_duration_minutes": 240.0,
+          "actual_duration_minutes": null,
+          "job_quantity": 100.0,
+          "current_done_quantity": 0.0,
+          "composite_risk_score": 1.6142857142857145,
+          "is_delayed": true,
+          "predicted_overrun_hours": 1.0,
+          "overrun_basis": "operator_pace",
+          "signals": [
+            {
+              "key": "time_overrun_ratio",
+              "value": null,
+              "weight": 0.4,
+              "fired": false,
+              "contribution": null,
+              "detail": {
+                "actual_minutes": null,
+                "expected_minutes": 240.0,
+                "actual_hrs": null,
+                "expected_hrs": 4.0,
+                "delta_hrs": null
+              }
+            },
+            {
+              "key": "operator_pace_ratio",
+              "value": 1.25,
+              "weight": 0.3,
+              "fired": true,
+              "contribution": 0.7743362831858407,
+              "detail": {
+                "pace_ratio": 1.25,
+                "operator_count": 1,
+                "completed_work_orders": 1
+              }
+            },
+            {
+              "key": "material_shortfall_ratio",
+              "value": 2.5,
+              "weight": 0.0,
+              "fired": true,
+              "contribution": null,
+              "detail": {
+                "short_components": [
+                  {
+                    "component_id": "item-steel-plate",
+                    "name": "Steel Plate 12mm",
+                    "required_quantity": 100.0,
+                    "available_quantity": 40.0,
+                    "shortfall_quantity": 60.0,
+                    "vendor_name": "Lanka Steel",
+                    "vendor_lead_time_ratio": 1.5
+                  }
+                ]
+              }
+            },
+            {
+              "key": "supplier_reliability",
+              "value": 1.1428571428571428,
+              "weight": 0.0,
+              "fired": true,
+              "contribution": null,
+              "detail": {
+                "vendor_names": [
+                  "Colombo Fasteners",
+                  "Lanka Steel"
+                ],
+                "mean_lead_time_ratio": 1.1428571428571428
+              }
+            },
+            {
+              "key": "predecessor_time_overrun_ratio",
+              "value": 1.25,
+              "weight": 0.0,
+              "fired": true,
+              "contribution": null,
+              "detail": {
+                "ratio": 1.25,
+                "predecessor_operation_ids": [
+                  "wo-cutting-0001"
+                ]
+              }
+            }
+          ],
+          "components_short": [
+            {
+              "component_id": "item-steel-plate",
+              "name": "Steel Plate 12mm",
+              "required_quantity": 100.0,
+              "available_quantity": 40.0,
+              "shortfall_quantity": 60.0,
+              "vendor_name": "Lanka Steel",
+              "vendor_lead_time_ratio": 1.5
+            }
+          ],
+          "depends_on_operation_ids": [
+            "wo-cutting-0001"
+          ],
+          "is_scorable": false
+        }
+      ],
+      "material_overrun": [
+        {
+          "component_id": "item-steel-plate",
+          "name": "Steel Plate 12mm",
+          "required_quantity": 100.0,
+          "available_quantity": 40.0,
+          "shortfall_quantity": 60.0,
+          "vendor_name": "Lanka Steel",
+          "vendor_lead_time_ratio": 1.5
+        }
+      ],
+      "job_signals": [
+        {
+          "key": "material_shortfall_ratio",
+          "value": 2.5,
+          "weight": 0.0,
+          "fired": true,
+          "contribution": null,
+          "detail": {
+            "short_components": [
+              {
+                "component_id": "item-steel-plate",
+                "name": "Steel Plate 12mm",
+                "required_quantity": 100.0,
+                "available_quantity": 40.0,
+                "shortfall_quantity": 60.0,
+                "vendor_name": "Lanka Steel",
+                "vendor_lead_time_ratio": 1.5
+              }
+            ]
+          }
+        },
+        {
+          "key": "supplier_reliability",
+          "value": 1.1428571428571428,
+          "weight": 0.0,
+          "fired": true,
+          "contribution": null,
+          "detail": {
+            "vendor_names": [
+              "Colombo Fasteners",
+              "Lanka Steel"
+            ],
+            "mean_lead_time_ratio": 1.1428571428571428
+          }
+        }
+      ],
+      "summary_risk_score": 1.4523809523809523,
+      "summary_overrun_hours": 8.666666666666666,
+      "summary_is_delayed": true,
+      "summary_basis": "worst_operation",
+      "issues": []
+    },
+    "material_job": {
+      "job_id": "WH/MO/00420",
+      "delay_threshold": 1.0,
+      "weights": {
+        "time_overrun_ratio": 0.4,
+        "operator_pace_ratio": 0.3,
+        "material_shortfall_ratio": 0.15,
+        "supplier_reliability": 0.05
+      },
+      "operations": [
+        {
+          "operation_id": "wo-moulding-0001",
+          "operation_name": "INDEPENDENT \u00b7 wo-mould",
+          "status": "IN_PROGRESS",
+          "expected_duration_minutes": 600.0,
+          "actual_duration_minutes": 300.0,
+          "job_quantity": 200.0,
+          "current_done_quantity": 110.0,
+          "composite_risk_score": 1.0944444444444443,
+          "is_delayed": true,
+          "predicted_overrun_hours": -0.9090909090909103,
+          "overrun_basis": "quantity",
+          "signals": [
+            {
+              "key": "time_overrun_ratio",
+              "value": 0.5,
+              "weight": 0.4,
+              "fired": false,
+              "contribution": 0.20304568527918784,
+              "detail": {
+                "actual_minutes": 300.0,
+                "expected_minutes": 600.0,
+                "actual_hrs": 5.0,
+                "expected_hrs": 10.0,
+                "delta_hrs": -5.0
+              }
+            },
+            {
+              "key": "operator_pace_ratio",
+              "value": 0.95,
+              "weight": 0.3,
+              "fired": false,
+              "contribution": 0.2893401015228427,
+              "detail": {
+                "pace_ratio": 0.95,
+                "operator_count": 1,
+                "completed_work_orders": 1
+              }
+            },
+            {
+              "key": "material_shortfall_ratio",
+              "value": 2.6666666666666665,
+              "weight": 0.15,
+              "fired": true,
+              "contribution": 0.40609137055837563,
+              "detail": {
+                "short_components": [
+                  {
+                    "component_id": "item-resin",
+                    "name": "Epoxy Resin",
+                    "required_quantity": 200.0,
+                    "available_quantity": 75.0,
+                    "shortfall_quantity": 125.0,
+                    "vendor_name": "Ceylon Chemicals",
+                    "vendor_lead_time_ratio": 2.0
+                  }
+                ]
+              }
+            },
+            {
+              "key": "supplier_reliability",
+              "value": 2.0,
+              "weight": 0.05,
+              "fired": true,
+              "contribution": 0.10152284263959392,
+              "detail": {
+                "vendor_names": [
+                  "Ceylon Chemicals"
+                ],
+                "mean_lead_time_ratio": 2.0
+              }
+            },
+            {
+              "key": "predecessor_time_overrun_ratio",
+              "value": null,
+              "weight": 0.0,
+              "fired": false,
+              "contribution": null,
+              "detail": {
+                "ratio": null,
+                "predecessor_operation_ids": []
+              }
+            }
+          ],
+          "components_short": [
+            {
+              "component_id": "item-resin",
+              "name": "Epoxy Resin",
+              "required_quantity": 200.0,
+              "available_quantity": 75.0,
+              "shortfall_quantity": 125.0,
+              "vendor_name": "Ceylon Chemicals",
+              "vendor_lead_time_ratio": 2.0
+            }
+          ],
+          "depends_on_operation_ids": [],
+          "is_scorable": true
+        }
+      ],
+      "material_overrun": [
+        {
+          "component_id": "item-resin",
+          "name": "Epoxy Resin",
+          "required_quantity": 200.0,
+          "available_quantity": 75.0,
+          "shortfall_quantity": 125.0,
+          "vendor_name": "Ceylon Chemicals",
+          "vendor_lead_time_ratio": 2.0
+        }
+      ],
+      "job_signals": [
+        {
+          "key": "material_shortfall_ratio",
+          "value": 2.6666666666666665,
+          "weight": 0.15,
+          "fired": true,
+          "contribution": 0.40609137055837563,
+          "detail": {
+            "short_components": [
+              {
+                "component_id": "item-resin",
+                "name": "Epoxy Resin",
+                "required_quantity": 200.0,
+                "available_quantity": 75.0,
+                "shortfall_quantity": 125.0,
+                "vendor_name": "Ceylon Chemicals",
+                "vendor_lead_time_ratio": 2.0
+              }
+            ]
+          }
+        },
+        {
+          "key": "supplier_reliability",
+          "value": 2.0,
+          "weight": 0.05,
+          "fired": true,
+          "contribution": 0.10152284263959392,
+          "detail": {
+            "vendor_names": [
+              "Ceylon Chemicals"
+            ],
+            "mean_lead_time_ratio": 2.0
+          }
+        }
+      ],
+      "summary_risk_score": 1.0944444444444443,
+      "summary_overrun_hours": -0.9090909090909103,
+      "summary_is_delayed": true,
+      "summary_basis": "worst_operation",
+      "issues": []
+    },
+    "simple_time_job": {
+      "job_id": "WH/MO/00430",
+      "delay_threshold": 1.0,
+      "weights": {
+        "time_overrun_ratio": 0.4,
+        "operator_pace_ratio": 0.3,
+        "material_shortfall_ratio": 0.15,
+        "supplier_reliability": 0.05
+      },
+      "operations": [
+        {
+          "operation_id": "wo-press-0001",
+          "operation_name": "Pressing",
+          "status": "IN_PROGRESS",
+          "expected_duration_minutes": 240.0,
+          "actual_duration_minutes": 360.0,
+          "job_quantity": 50.0,
+          "current_done_quantity": 30.0,
+          "composite_risk_score": 1.090909090909091,
+          "is_delayed": true,
+          "predicted_overrun_hours": 6.0,
+          "overrun_basis": "quantity",
+          "signals": [
+            {
+              "key": "time_overrun_ratio",
+              "value": 1.5,
+              "weight": 0.4,
+              "fired": true,
+              "contribution": 1.0,
+              "detail": {
+                "actual_minutes": 360.0,
+                "expected_minutes": 240.0,
+                "actual_hrs": 6.0,
+                "expected_hrs": 4.0,
+                "delta_hrs": 2.0
+              }
+            },
+            {
+              "key": "operator_pace_ratio",
+              "value": null,
+              "weight": 0.3,
+              "fired": false,
+              "contribution": null,
+              "detail": {
+                "pace_ratio": null,
+                "operator_count": 0,
+                "completed_work_orders": 0
+              }
+            },
+            {
+              "key": "material_shortfall_ratio",
+              "value": 0.0,
+              "weight": 0.15,
+              "fired": false,
+              "contribution": 0.0,
+              "detail": {
+                "short_components": []
+              }
+            },
+            {
+              "key": "supplier_reliability",
+              "value": null,
+              "weight": 0.05,
+              "fired": false,
+              "contribution": null,
+              "detail": {
+                "vendor_names": [],
+                "mean_lead_time_ratio": null
+              }
+            },
+            {
+              "key": "predecessor_time_overrun_ratio",
+              "value": null,
+              "weight": 0.0,
+              "fired": false,
+              "contribution": null,
+              "detail": {
+                "ratio": null,
+                "predecessor_operation_ids": []
+              }
+            }
+          ],
+          "components_short": [],
+          "depends_on_operation_ids": [],
+          "is_scorable": true
+        }
+      ],
+      "material_overrun": [],
+      "job_signals": [
+        {
+          "key": "material_shortfall_ratio",
+          "value": 0.0,
+          "weight": 0.15,
+          "fired": false,
+          "contribution": 0.0,
+          "detail": {
+            "short_components": []
+          }
+        },
+        {
+          "key": "supplier_reliability",
+          "value": null,
+          "weight": 0.05,
+          "fired": false,
+          "contribution": null,
+          "detail": {
+            "mean_lead_time_ratio": null
+          }
+        }
+      ],
+      "summary_risk_score": 1.090909090909091,
+      "summary_overrun_hours": 6.0,
+      "summary_is_delayed": true,
+      "summary_basis": "worst_operation",
+      "issues": []
+    }
+  },
+  "cases": [
+    {
+      "id": "supported-full-set",
+      "category": "supported",
+      "scenario": "full_job",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "time_overrun_ratio",
+          "scope": "operation",
+          "headline": "Actual time logged has exceeded expected duration",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 10.0 hrs logged of 8.0 planned",
+          "delta": "+2.0 hrs",
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.3825136612021858,
+          "quoted": {
+            "actual_hrs": 10.0,
+            "expected_hrs": 8.0,
+            "delta_hrs": 2.0
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "operator_pace_ratio",
+          "scope": "operation",
+          "headline": "Assigned operator has a history of overrunning",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 operator pace 1.25\u00d7 planned over recent completed jobs",
+          "delta": null,
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "pace_ratio": 1.25
+          }
+        },
+        {
+          "index": 2,
+          "signal_key": "material_shortfall_ratio",
+          "scope": "job",
+          "headline": "Required material is short in the warehouse",
+          "detail": "WH/MO/00142 \u00b7 Steel Plate 12mm \u2013 60 short",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "shortfall:item-steel-plate": 60.0
+          }
+        },
+        {
+          "index": 3,
+          "signal_key": "supplier_reliability",
+          "scope": "job",
+          "headline": "Supplier for a short component has a late-delivery history",
+          "detail": "WH/MO/00142 \u00b7 vendors Colombo Fasteners, Lanka Steel average lead-time ratio 1.14",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.04371584699453552,
+          "quoted": {
+            "mean_lead_time_ratio": 1.1428571428571428
+          }
+        }
+      ],
+      "target_index": 0,
+      "expected_supported": true,
+      "expected_approved": true,
+      "note": "the composer's own output over the recorded fixture"
+    },
+    {
+      "id": "supported-full-set-reordered",
+      "category": "supported",
+      "scenario": "full_job",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "supplier_reliability",
+          "scope": "job",
+          "headline": "Supplier for a short component has a late-delivery history",
+          "detail": "WH/MO/00142 \u00b7 vendors Colombo Fasteners, Lanka Steel average lead-time ratio 1.14",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.04371584699453552,
+          "quoted": {
+            "mean_lead_time_ratio": 1.1428571428571428
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "material_shortfall_ratio",
+          "scope": "job",
+          "headline": "Required material is short in the warehouse",
+          "detail": "WH/MO/00142 \u00b7 Steel Plate 12mm \u2013 60 short",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "shortfall:item-steel-plate": 60.0
+          }
+        },
+        {
+          "index": 2,
+          "signal_key": "operator_pace_ratio",
+          "scope": "operation",
+          "headline": "Assigned operator has a history of overrunning",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 operator pace 1.25\u00d7 planned over recent completed jobs",
+          "delta": null,
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "pace_ratio": 1.25
+          }
+        },
+        {
+          "index": 3,
+          "signal_key": "time_overrun_ratio",
+          "scope": "operation",
+          "headline": "Actual time logged has exceeded expected duration",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 10.0 hrs logged of 8.0 planned",
+          "delta": "+2.0 hrs",
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.3825136612021858,
+          "quoted": {
+            "actual_hrs": 10.0,
+            "expected_hrs": 8.0,
+            "delta_hrs": 2.0
+          }
+        }
+      ],
+      "target_index": 0,
+      "expected_supported": true,
+      "expected_approved": true,
+      "note": "order is a presentation choice, not a support question"
+    },
+    {
+      "id": "supported-operator-line",
+      "category": "supported",
+      "scenario": "full_job",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "time_overrun_ratio",
+          "scope": "operation",
+          "headline": "Actual time logged has exceeded expected duration",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 10.0 hrs logged of 8.0 planned",
+          "delta": "+2.0 hrs",
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.3825136612021858,
+          "quoted": {
+            "actual_hrs": 10.0,
+            "expected_hrs": 8.0,
+            "delta_hrs": 2.0
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "operator_pace_ratio",
+          "scope": "operation",
+          "headline": "Assigned operator has a history of overrunning",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 operator pace 1.25\u00d7 planned over recent completed jobs",
+          "delta": null,
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "pace_ratio": 1.25
+          }
+        },
+        {
+          "index": 2,
+          "signal_key": "material_shortfall_ratio",
+          "scope": "job",
+          "headline": "Required material is short in the warehouse",
+          "detail": "WH/MO/00142 \u00b7 Steel Plate 12mm \u2013 60 short",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "shortfall:item-steel-plate": 60.0
+          }
+        },
+        {
+          "index": 3,
+          "signal_key": "supplier_reliability",
+          "scope": "job",
+          "headline": "Supplier for a short component has a late-delivery history",
+          "detail": "WH/MO/00142 \u00b7 vendors Colombo Fasteners, Lanka Steel average lead-time ratio 1.14",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.04371584699453552,
+          "quoted": {
+            "mean_lead_time_ratio": 1.1428571428571428
+          }
+        }
+      ],
+      "target_index": 1,
+      "expected_supported": true,
+      "expected_approved": true,
+      "note": "operator pace 1.25 against a 1.2 baseline"
+    },
+    {
+      "id": "supported-material-line",
+      "category": "supported",
+      "scenario": "full_job",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "time_overrun_ratio",
+          "scope": "operation",
+          "headline": "Actual time logged has exceeded expected duration",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 10.0 hrs logged of 8.0 planned",
+          "delta": "+2.0 hrs",
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.3825136612021858,
+          "quoted": {
+            "actual_hrs": 10.0,
+            "expected_hrs": 8.0,
+            "delta_hrs": 2.0
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "operator_pace_ratio",
+          "scope": "operation",
+          "headline": "Assigned operator has a history of overrunning",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 operator pace 1.25\u00d7 planned over recent completed jobs",
+          "delta": null,
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "pace_ratio": 1.25
+          }
+        },
+        {
+          "index": 2,
+          "signal_key": "material_shortfall_ratio",
+          "scope": "job",
+          "headline": "Required material is short in the warehouse",
+          "detail": "WH/MO/00142 \u00b7 Steel Plate 12mm \u2013 60 short",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "shortfall:item-steel-plate": 60.0
+          }
+        },
+        {
+          "index": 3,
+          "signal_key": "supplier_reliability",
+          "scope": "job",
+          "headline": "Supplier for a short component has a late-delivery history",
+          "detail": "WH/MO/00142 \u00b7 vendors Colombo Fasteners, Lanka Steel average lead-time ratio 1.14",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.04371584699453552,
+          "quoted": {
+            "mean_lead_time_ratio": 1.1428571428571428
+          }
+        }
+      ],
+      "target_index": 2,
+      "expected_supported": true,
+      "expected_approved": true,
+      "note": "60 short of 100 required"
+    },
+    {
+      "id": "supported-supplier-line",
+      "category": "supported",
+      "scenario": "full_job",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "time_overrun_ratio",
+          "scope": "operation",
+          "headline": "Actual time logged has exceeded expected duration",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 10.0 hrs logged of 8.0 planned",
+          "delta": "+2.0 hrs",
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.3825136612021858,
+          "quoted": {
+            "actual_hrs": 10.0,
+            "expected_hrs": 8.0,
+            "delta_hrs": 2.0
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "operator_pace_ratio",
+          "scope": "operation",
+          "headline": "Assigned operator has a history of overrunning",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 operator pace 1.25\u00d7 planned over recent completed jobs",
+          "delta": null,
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "pace_ratio": 1.25
+          }
+        },
+        {
+          "index": 2,
+          "signal_key": "material_shortfall_ratio",
+          "scope": "job",
+          "headline": "Required material is short in the warehouse",
+          "detail": "WH/MO/00142 \u00b7 Steel Plate 12mm \u2013 60 short",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "shortfall:item-steel-plate": 60.0
+          }
+        },
+        {
+          "index": 3,
+          "signal_key": "supplier_reliability",
+          "scope": "job",
+          "headline": "Supplier for a short component has a late-delivery history",
+          "detail": "WH/MO/00142 \u00b7 vendors Colombo Fasteners, Lanka Steel average lead-time ratio 1.14",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.04371584699453552,
+          "quoted": {
+            "mean_lead_time_ratio": 1.1428571428571428
+          }
+        }
+      ],
+      "target_index": 3,
+      "expected_supported": true,
+      "expected_approved": true,
+      "note": "mean lead-time ratio above 1.0 across the named vendors"
+    },
+    {
+      "id": "supported-zero-weighted-signals-absent",
+      "category": "supported",
+      "scenario": "time_only_weights",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "time_overrun_ratio",
+          "scope": "operation",
+          "headline": "Actual time logged has exceeded expected duration",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 10.0 hrs logged of 8.0 planned",
+          "delta": "+2.0 hrs",
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.49180327868852464,
+          "quoted": {
+            "actual_hrs": 10.0,
+            "expected_hrs": 8.0,
+            "delta_hrs": 2.0
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "operator_pace_ratio",
+          "scope": "operation",
+          "headline": "Assigned operator has a history of overrunning",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 operator pace 1.25\u00d7 planned over recent completed jobs",
+          "delta": null,
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.36885245901639346,
+          "quoted": {
+            "pace_ratio": 1.25
+          }
+        }
+      ],
+      "target_index": 0,
+      "expected_supported": true,
+      "expected_approved": true,
+      "note": "material and supplier fired but carry zero weight for this tenant, so their absence is correct, not an omission"
+    },
+    {
+      "id": "supported-zero-weight-reordered",
+      "category": "supported",
+      "scenario": "time_only_weights",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "operator_pace_ratio",
+          "scope": "operation",
+          "headline": "Assigned operator has a history of overrunning",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 operator pace 1.25\u00d7 planned over recent completed jobs",
+          "delta": null,
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.36885245901639346,
+          "quoted": {
+            "pace_ratio": 1.25
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "time_overrun_ratio",
+          "scope": "operation",
+          "headline": "Actual time logged has exceeded expected duration",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 10.0 hrs logged of 8.0 planned",
+          "delta": "+2.0 hrs",
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.49180327868852464,
+          "quoted": {
+            "actual_hrs": 10.0,
+            "expected_hrs": 8.0,
+            "delta_hrs": 2.0
+          }
+        }
+      ],
+      "target_index": 0,
+      "expected_supported": true,
+      "expected_approved": true,
+      "note": "same shorter set, different order"
+    },
+    {
+      "id": "supported-single-cause",
+      "category": "supported",
+      "scenario": "simple_time_job",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "time_overrun_ratio",
+          "scope": "operation",
+          "headline": "Actual time logged has exceeded expected duration",
+          "detail": "Pressing \u00b7 6.0 hrs logged of 4.0 planned",
+          "delta": "+2.0 hrs",
+          "operation_id": "wo-press-0001",
+          "contribution": 1.0,
+          "quoted": {
+            "actual_hrs": 6.0,
+            "expected_hrs": 4.0,
+            "delta_hrs": 2.0
+          }
+        }
+      ],
+      "target_index": 0,
+      "expected_supported": true,
+      "expected_approved": true,
+      "note": "one operation, one fired signal, one line"
+    },
+    {
+      "id": "supported-material-only-job",
+      "category": "supported",
+      "scenario": "material_job",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "material_shortfall_ratio",
+          "scope": "job",
+          "headline": "Required material is short in the warehouse",
+          "detail": "WH/MO/00420 \u00b7 Epoxy Resin \u2013 125 short",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.40609137055837563,
+          "quoted": {
+            "shortfall:item-resin": 125.0
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "supplier_reliability",
+          "scope": "job",
+          "headline": "Supplier for a short component has a late-delivery history",
+          "detail": "WH/MO/00420 \u00b7 vendors Ceylon Chemicals average lead-time ratio 2.00",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.10152284263959392,
+          "quoted": {
+            "mean_lead_time_ratio": 2.0
+          }
+        }
+      ],
+      "target_index": 0,
+      "expected_supported": true,
+      "expected_approved": true,
+      "note": "time and operator are quiet; only the job-scoped causes fire"
+    },
+    {
+      "id": "supported-material-only-supplier",
+      "category": "supported",
+      "scenario": "material_job",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "material_shortfall_ratio",
+          "scope": "job",
+          "headline": "Required material is short in the warehouse",
+          "detail": "WH/MO/00420 \u00b7 Epoxy Resin \u2013 125 short",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.40609137055837563,
+          "quoted": {
+            "shortfall:item-resin": 125.0
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "supplier_reliability",
+          "scope": "job",
+          "headline": "Supplier for a short component has a late-delivery history",
+          "detail": "WH/MO/00420 \u00b7 vendors Ceylon Chemicals average lead-time ratio 2.00",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.10152284263959392,
+          "quoted": {
+            "mean_lead_time_ratio": 2.0
+          }
+        }
+      ],
+      "target_index": 1,
+      "expected_supported": true,
+      "expected_approved": true,
+      "note": "a genuinely late vendor on the short component"
+    },
+    {
+      "id": "unsupported-fabricated-breakdown",
+      "category": "fabricated_cause",
+      "scenario": "full_job",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "time_overrun_ratio",
+          "scope": "operation",
+          "headline": "Machine breakdown on the cutting line caused the overrun",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 10.0 hrs logged of 8.0 planned",
+          "delta": "+2.0 hrs",
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.3825136612021858,
+          "quoted": {
+            "actual_hrs": 10.0,
+            "expected_hrs": 8.0,
+            "delta_hrs": 2.0
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "operator_pace_ratio",
+          "scope": "operation",
+          "headline": "Assigned operator has a history of overrunning",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 operator pace 1.25\u00d7 planned over recent completed jobs",
+          "delta": null,
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "pace_ratio": 1.25
+          }
+        },
+        {
+          "index": 2,
+          "signal_key": "material_shortfall_ratio",
+          "scope": "job",
+          "headline": "Required material is short in the warehouse",
+          "detail": "WH/MO/00142 \u00b7 Steel Plate 12mm \u2013 60 short",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "shortfall:item-steel-plate": 60.0
+          }
+        },
+        {
+          "index": 3,
+          "signal_key": "supplier_reliability",
+          "scope": "job",
+          "headline": "Supplier for a short component has a late-delivery history",
+          "detail": "WH/MO/00142 \u00b7 vendors Colombo Fasteners, Lanka Steel average lead-time ratio 1.14",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.04371584699453552,
+          "quoted": {
+            "mean_lead_time_ratio": 1.1428571428571428
+          }
+        }
+      ],
+      "target_index": 0,
+      "expected_supported": false,
+      "expected_approved": false,
+      "note": "no signal observes machine downtime"
+    },
+    {
+      "id": "unsupported-fabricated-inspection",
+      "category": "fabricated_cause",
+      "scenario": "full_job",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "time_overrun_ratio",
+          "scope": "operation",
+          "headline": "Actual time logged has exceeded expected duration",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 10.0 hrs logged of 8.0 planned",
+          "delta": "+2.0 hrs",
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.3825136612021858,
+          "quoted": {
+            "actual_hrs": 10.0,
+            "expected_hrs": 8.0,
+            "delta_hrs": 2.0
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "operator_pace_ratio",
+          "scope": "operation",
+          "headline": "Operator was waiting on a quality inspection",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 operator pace 1.25\u00d7 planned over recent completed jobs",
+          "delta": null,
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "pace_ratio": 1.25
+          }
+        },
+        {
+          "index": 2,
+          "signal_key": "material_shortfall_ratio",
+          "scope": "job",
+          "headline": "Required material is short in the warehouse",
+          "detail": "WH/MO/00142 \u00b7 Steel Plate 12mm \u2013 60 short",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "shortfall:item-steel-plate": 60.0
+          }
+        },
+        {
+          "index": 3,
+          "signal_key": "supplier_reliability",
+          "scope": "job",
+          "headline": "Supplier for a short component has a late-delivery history",
+          "detail": "WH/MO/00142 \u00b7 vendors Colombo Fasteners, Lanka Steel average lead-time ratio 1.14",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.04371584699453552,
+          "quoted": {
+            "mean_lead_time_ratio": 1.1428571428571428
+          }
+        }
+      ],
+      "target_index": 1,
+      "expected_supported": false,
+      "expected_approved": false,
+      "note": "pace history says nothing about what the operator was waiting for"
+    },
+    {
+      "id": "unsupported-fabricated-weather",
+      "category": "fabricated_cause",
+      "scenario": "material_job",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "material_shortfall_ratio",
+          "scope": "job",
+          "headline": "Required material is short in the warehouse",
+          "detail": "WH/MO/00420 \u00b7 Epoxy Resin \u2013 125 short",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.40609137055837563,
+          "quoted": {
+            "shortfall:item-resin": 125.0
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "supplier_reliability",
+          "scope": "job",
+          "headline": "Supplier shipments were held up by bad weather",
+          "detail": "WH/MO/00420 \u00b7 vendors Ceylon Chemicals average lead-time ratio 2.00",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.10152284263959392,
+          "quoted": {
+            "mean_lead_time_ratio": 2.0
+          }
+        }
+      ],
+      "target_index": 1,
+      "expected_supported": false,
+      "expected_approved": false,
+      "note": "lead-time ratios carry no reason for lateness"
+    },
+    {
+      "id": "unsupported-wrong-hours",
+      "category": "wrong_number",
+      "scenario": "full_job",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "time_overrun_ratio",
+          "scope": "operation",
+          "headline": "Actual time logged has exceeded expected duration",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 26.0 hrs logged of 8.0 planned",
+          "delta": "+18.0 hrs",
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.3825136612021858,
+          "quoted": {
+            "actual_hrs": 26.0,
+            "expected_hrs": 8.0,
+            "delta_hrs": 18.0
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "operator_pace_ratio",
+          "scope": "operation",
+          "headline": "Assigned operator has a history of overrunning",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 operator pace 1.25\u00d7 planned over recent completed jobs",
+          "delta": null,
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "pace_ratio": 1.25
+          }
+        },
+        {
+          "index": 2,
+          "signal_key": "material_shortfall_ratio",
+          "scope": "job",
+          "headline": "Required material is short in the warehouse",
+          "detail": "WH/MO/00142 \u00b7 Steel Plate 12mm \u2013 60 short",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "shortfall:item-steel-plate": 60.0
+          }
+        },
+        {
+          "index": 3,
+          "signal_key": "supplier_reliability",
+          "scope": "job",
+          "headline": "Supplier for a short component has a late-delivery history",
+          "detail": "WH/MO/00142 \u00b7 vendors Colombo Fasteners, Lanka Steel average lead-time ratio 1.14",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.04371584699453552,
+          "quoted": {
+            "mean_lead_time_ratio": 1.1428571428571428
+          }
+        }
+      ],
+      "target_index": 0,
+      "expected_supported": false,
+      "expected_approved": false,
+      "note": "the evidence says 10.0 hrs against 8.0"
+    },
+    {
+      "id": "unsupported-wrong-pace",
+      "category": "wrong_number",
+      "scenario": "full_job",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "time_overrun_ratio",
+          "scope": "operation",
+          "headline": "Actual time logged has exceeded expected duration",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 10.0 hrs logged of 8.0 planned",
+          "delta": "+2.0 hrs",
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.3825136612021858,
+          "quoted": {
+            "actual_hrs": 10.0,
+            "expected_hrs": 8.0,
+            "delta_hrs": 2.0
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "operator_pace_ratio",
+          "scope": "operation",
+          "headline": "Assigned operator has a history of overrunning",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 operator pace 3.40\u00d7 planned over recent completed jobs",
+          "delta": null,
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "pace_ratio": 3.4
+          }
+        },
+        {
+          "index": 2,
+          "signal_key": "material_shortfall_ratio",
+          "scope": "job",
+          "headline": "Required material is short in the warehouse",
+          "detail": "WH/MO/00142 \u00b7 Steel Plate 12mm \u2013 60 short",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "shortfall:item-steel-plate": 60.0
+          }
+        },
+        {
+          "index": 3,
+          "signal_key": "supplier_reliability",
+          "scope": "job",
+          "headline": "Supplier for a short component has a late-delivery history",
+          "detail": "WH/MO/00142 \u00b7 vendors Colombo Fasteners, Lanka Steel average lead-time ratio 1.14",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.04371584699453552,
+          "quoted": {
+            "mean_lead_time_ratio": 1.1428571428571428
+          }
+        }
+      ],
+      "target_index": 1,
+      "expected_supported": false,
+      "expected_approved": false,
+      "note": "the evidence says 1.25"
+    },
+    {
+      "id": "unsupported-wrong-shortfall",
+      "category": "wrong_number",
+      "scenario": "full_job",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "time_overrun_ratio",
+          "scope": "operation",
+          "headline": "Actual time logged has exceeded expected duration",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 10.0 hrs logged of 8.0 planned",
+          "delta": "+2.0 hrs",
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.3825136612021858,
+          "quoted": {
+            "actual_hrs": 10.0,
+            "expected_hrs": 8.0,
+            "delta_hrs": 2.0
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "operator_pace_ratio",
+          "scope": "operation",
+          "headline": "Assigned operator has a history of overrunning",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 operator pace 1.25\u00d7 planned over recent completed jobs",
+          "delta": null,
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "pace_ratio": 1.25
+          }
+        },
+        {
+          "index": 2,
+          "signal_key": "material_shortfall_ratio",
+          "scope": "job",
+          "headline": "Required material is short in the warehouse",
+          "detail": "WH/MO/00142 \u00b7 Steel Plate 12mm \u2013 480 short",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "shortfall:item-steel-plate": 480.0
+          }
+        },
+        {
+          "index": 3,
+          "signal_key": "supplier_reliability",
+          "scope": "job",
+          "headline": "Supplier for a short component has a late-delivery history",
+          "detail": "WH/MO/00142 \u00b7 vendors Colombo Fasteners, Lanka Steel average lead-time ratio 1.14",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.04371584699453552,
+          "quoted": {
+            "mean_lead_time_ratio": 1.1428571428571428
+          }
+        }
+      ],
+      "target_index": 2,
+      "expected_supported": false,
+      "expected_approved": false,
+      "note": "100 required against 40 available is 60 short, not 480"
+    },
+    {
+      "id": "unsupported-time-on-a-quiet-operation",
+      "category": "non_fired_signal",
+      "scenario": "full_job",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "time_overrun_ratio",
+          "scope": "operation",
+          "headline": "Actual time logged has exceeded expected duration",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 10.0 hrs logged of 8.0 planned",
+          "delta": "+2.0 hrs",
+          "operation_id": "wo-welding-0002",
+          "contribution": 0.3825136612021858,
+          "quoted": {
+            "actual_hrs": 10.0,
+            "expected_hrs": 8.0,
+            "delta_hrs": 2.0
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "operator_pace_ratio",
+          "scope": "operation",
+          "headline": "Assigned operator has a history of overrunning",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 operator pace 1.25\u00d7 planned over recent completed jobs",
+          "delta": null,
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "pace_ratio": 1.25
+          }
+        },
+        {
+          "index": 2,
+          "signal_key": "material_shortfall_ratio",
+          "scope": "job",
+          "headline": "Required material is short in the warehouse",
+          "detail": "WH/MO/00142 \u00b7 Steel Plate 12mm \u2013 60 short",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "shortfall:item-steel-plate": 60.0
+          }
+        },
+        {
+          "index": 3,
+          "signal_key": "supplier_reliability",
+          "scope": "job",
+          "headline": "Supplier for a short component has a late-delivery history",
+          "detail": "WH/MO/00142 \u00b7 vendors Colombo Fasteners, Lanka Steel average lead-time ratio 1.14",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.04371584699453552,
+          "quoted": {
+            "mean_lead_time_ratio": 1.1428571428571428
+          }
+        }
+      ],
+      "target_index": 0,
+      "expected_supported": false,
+      "expected_approved": false,
+      "note": "welding is 30% elapsed and not overrunning; its time signal did not fire"
+    },
+    {
+      "id": "unsupported-operator-that-did-not-fire",
+      "category": "non_fired_signal",
+      "scenario": "material_job",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "material_shortfall_ratio",
+          "scope": "job",
+          "headline": "Required material is short in the warehouse",
+          "detail": "WH/MO/00420 \u00b7 Epoxy Resin \u2013 125 short",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.40609137055837563,
+          "quoted": {
+            "shortfall:item-resin": 125.0
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "supplier_reliability",
+          "scope": "job",
+          "headline": "Supplier for a short component has a late-delivery history",
+          "detail": "WH/MO/00420 \u00b7 vendors Ceylon Chemicals average lead-time ratio 2.00",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.10152284263959392,
+          "quoted": {
+            "mean_lead_time_ratio": 2.0
+          }
+        },
+        {
+          "index": 2,
+          "signal_key": "operator_pace_ratio",
+          "scope": "operation",
+          "headline": "Assigned operator has a history of overrunning",
+          "detail": "INDEPENDENT \u00b7 wo-mouldi \u00b7 operator pace 0.95\u00d7 planned over recent completed jobs",
+          "delta": null,
+          "operation_id": "wo-moulding-0001",
+          "contribution": null,
+          "quoted": {
+            "pace_ratio": 0.95
+          }
+        }
+      ],
+      "target_index": 2,
+      "expected_supported": false,
+      "expected_approved": false,
+      "note": "0.95 is faster than planned, and below the 1.2 baseline either way"
+    },
+    {
+      "id": "unsupported-omits-operator",
+      "category": "omitted_signal",
+      "scenario": "full_job",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "time_overrun_ratio",
+          "scope": "operation",
+          "headline": "Actual time logged has exceeded expected duration",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 10.0 hrs logged of 8.0 planned",
+          "delta": "+2.0 hrs",
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.3825136612021858,
+          "quoted": {
+            "actual_hrs": 10.0,
+            "expected_hrs": 8.0,
+            "delta_hrs": 2.0
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "material_shortfall_ratio",
+          "scope": "job",
+          "headline": "Required material is short in the warehouse",
+          "detail": "WH/MO/00142 \u00b7 Steel Plate 12mm \u2013 60 short",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "shortfall:item-steel-plate": 60.0
+          }
+        },
+        {
+          "index": 2,
+          "signal_key": "supplier_reliability",
+          "scope": "job",
+          "headline": "Supplier for a short component has a late-delivery history",
+          "detail": "WH/MO/00142 \u00b7 vendors Colombo Fasteners, Lanka Steel average lead-time ratio 1.14",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.04371584699453552,
+          "quoted": {
+            "mean_lead_time_ratio": 1.1428571428571428
+          }
+        }
+      ],
+      "target_index": null,
+      "expected_supported": null,
+      "expected_approved": false,
+      "note": "every line true, but a fired weighted cause is missing"
+    },
+    {
+      "id": "unsupported-omits-material",
+      "category": "omitted_signal",
+      "scenario": "full_job",
+      "lines": [
+        {
+          "index": 0,
+          "signal_key": "time_overrun_ratio",
+          "scope": "operation",
+          "headline": "Actual time logged has exceeded expected duration",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 10.0 hrs logged of 8.0 planned",
+          "delta": "+2.0 hrs",
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.3825136612021858,
+          "quoted": {
+            "actual_hrs": 10.0,
+            "expected_hrs": 8.0,
+            "delta_hrs": 2.0
+          }
+        },
+        {
+          "index": 1,
+          "signal_key": "operator_pace_ratio",
+          "scope": "operation",
+          "headline": "Assigned operator has a history of overrunning",
+          "detail": "INDEPENDENT \u00b7 wo-cutti \u00b7 operator pace 1.25\u00d7 planned over recent completed jobs",
+          "delta": null,
+          "operation_id": "wo-cutting-0001",
+          "contribution": 0.28688524590163933,
+          "quoted": {
+            "pace_ratio": 1.25
+          }
+        },
+        {
+          "index": 2,
+          "signal_key": "supplier_reliability",
+          "scope": "job",
+          "headline": "Supplier for a short component has a late-delivery history",
+          "detail": "WH/MO/00142 \u00b7 vendors Colombo Fasteners, Lanka Steel average lead-time ratio 1.14",
+          "delta": null,
+          "operation_id": null,
+          "contribution": 0.04371584699453552,
+          "quoted": {
+            "mean_lead_time_ratio": 1.1428571428571428
+          }
+        }
+      ],
+      "target_index": null,
+      "expected_supported": null,
+      "expected_approved": false,
+      "note": "the largest shortage in the job is not mentioned at all"
+    }
+  ]
+}
