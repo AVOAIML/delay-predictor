@@ -148,3 +148,99 @@ def test_review_agent_settings_default_safely(settings_env):
     # path through which raw prompt/response text is ever emitted.
     assert settings.m3_review_trace_enabled is False
     assert settings.m3_review_trace_include_content is False
+
+
+# ─── the Anthropic Messages surface ──────────────────────────────────────────
+#
+# Verified against a real Foundry staging resource: the /anthropic path answers
+# POST /v1/messages on an `x-api-key` header, and rejects an OpenAI-style
+# `api-key` with 401. These lock in the request shaping and response parsing
+# that finding produced, without a network call.
+
+
+@pytest.fixture
+def foundry(settings_env):
+    def build(base: str, model: str = "claude-sonnet-4-6"):
+        settings_env(
+            LLM_PROVIDER="azure_ai",
+            LLM_MODEL_ID=model,
+            AZURE_AI_API_KEY="test-key",
+            AZURE_AI_API_BASE=base,
+        )
+        return get_llm_provider()
+
+    return build
+
+
+def test_the_path_selects_the_protocol(foundry):
+    anthropic = foundry("https://res.services.ai.azure.com/anthropic")
+    url, headers, body = anthropic.build_request(
+        "hi", max_tokens=900, temperature=0.0, seed=0
+    )
+    assert url.endswith("/anthropic/v1/messages")
+    assert headers["x-api-key"] == "test-key"
+    assert headers["anthropic-version"] == AzureAIFoundryLLMProvider.ANTHROPIC_VERSION
+    assert "Authorization" not in headers
+
+
+def test_the_messages_api_never_receives_a_seed(foundry):
+    """It has no such parameter and rejects unknown fields, so sending one
+    would fail every call rather than merely be ignored."""
+    provider = foundry("https://res.services.ai.azure.com/anthropic")
+    _, _, body = provider.build_request("hi", max_tokens=900, temperature=0.0, seed=7)
+
+    assert "seed" not in body
+    assert body["max_tokens"] == 900  # required by Messages, unlike Chat Completions
+    assert body["temperature"] == 0.0
+    assert body["messages"] == [{"role": "user", "content": "hi"}]
+
+
+def test_a_chat_completions_endpoint_still_gets_bearer_and_seed(foundry):
+    provider = foundry("https://res.services.ai.azure.com/models")
+    url, headers, body = provider.build_request(
+        "hi", max_tokens=900, temperature=0.0, seed=7
+    )
+
+    assert url.endswith("/models/chat/completions")
+    assert headers["Authorization"] == "Bearer test-key"
+    assert "x-api-key" not in headers
+    assert body["seed"] == 7
+
+
+def test_the_model_id_is_sent_exactly_as_configured(foundry):
+    # A routing-prefixed name returns DeploymentNotFound, so the adapter must
+    # not quietly rewrite it: the operator has to see their own value echoed
+    # back in the error.
+    provider = foundry("https://res.services.ai.azure.com/anthropic",
+                       model="azure_ai/claude-sonnet-4-6")
+    _, _, body = provider.build_request("hi", max_tokens=16, temperature=0.0, seed=None)
+    assert body["model"] == "azure_ai/claude-sonnet-4-6"
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"content": [{"type": "text", "text": "OK"}]}, "OK"),
+        # Several text blocks are concatenated in order.
+        ({"content": [{"type": "text", "text": "A"}, {"type": "text", "text": "B"}]}, "AB"),
+        # A non-text block (a tool call) contributes nothing.
+        ({"content": [{"type": "tool_use", "id": "x"}]}, ""),
+        ({"choices": [{"message": {"content": "OK"}}]}, "OK"),
+        ({"choices": [{"message": {}}]}, ""),
+        ({}, ""),
+    ],
+)
+def test_both_response_shapes_are_understood(payload, expected):
+    assert AzureAIFoundryLLMProvider.extract_text(payload) == expected
+
+
+def test_the_adapter_needs_no_sdk():
+    """The runtime image installs neither the openai nor the anthropic SDK, so
+    an import of either here would fail in exactly the container that needs to
+    make the call."""
+    import inspect
+
+    source = inspect.getsource(AzureAIFoundryLLMProvider)
+    assert "import openai" not in source
+    assert "import anthropic" not in source
+    assert "urllib" in source
