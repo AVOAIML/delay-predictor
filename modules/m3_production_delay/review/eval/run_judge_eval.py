@@ -2,9 +2,12 @@
 separates supported explanations from unsupported ones.
 
 This is the only place in Section 3 that talks to a paid API, and it never
-runs unless it is asked to:
+runs unless it is asked to. The model is whatever ``LLM_PROVIDER`` selects, so
+the evaluation scores the deployment that would actually judge in production:
 
-    M3_REVIEW_JUDGE_EVAL=1 LLM_PROVIDER=openai LLM_MODEL_ID=<verified-id> \
+    M3_REVIEW_JUDGE_EVAL=1 LLM_PROVIDER=azure_ai \
+      AZURE_AI_API_KEY=... AZURE_AI_API_BASE=https://<resource>.services.ai.azure.com \
+      LLM_MODEL_ID=<your-foundry-deployment-name> \
       uv run python modules/m3_production_delay/review/eval/run_judge_eval.py
 
 Without ``M3_REVIEW_JUDGE_EVAL`` set it exits immediately, so it is safe to
@@ -29,11 +32,10 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from m3_production_delay.review.judge import LLMCallable, build_llm, judge_draft
+from m3_production_delay.llm_agents.review_agent import ReviewAgent
 from m3_production_delay.review.schemas import EvidencePack, InsightDraft, InsightLine
 
 CASES_PATH = Path(__file__).resolve().parent / "judge_cases.json"
@@ -76,7 +78,7 @@ def _draft_for(case: dict, pack: EvidencePack) -> InsightDraft:
     )
 
 
-def run_cases(llm: LLMCallable, payload: dict | None = None) -> list[CaseResult]:
+def run_cases(agent: ReviewAgent, payload: dict | None = None) -> list[CaseResult]:
     payload = payload or load_cases()
     packs = {
         name: EvidencePack.from_dict(scenario)
@@ -85,7 +87,7 @@ def run_cases(llm: LLMCallable, payload: dict | None = None) -> list[CaseResult]
     results: list[CaseResult] = []
     for case in payload["cases"]:
         pack = packs[case["scenario"]]
-        verdict = judge_draft(pack, _draft_for(case, pack), llm)
+        verdict = agent.judge(pack, _draft_for(case, pack))
         target = case.get("target_index")
         pinpointed: bool | None = None
         if target is not None and not verdict.approved:
@@ -174,14 +176,16 @@ def report(results: list[CaseResult]) -> str:
     return "\n".join(lines)
 
 
-def main(llm: Callable[[str, str], str] | None = None) -> int:
+def main(agent: ReviewAgent | None = None) -> int:
     if not os.environ.get(ENV_FLAG):
         print(
             f"{ENV_FLAG} is not set — skipping. This evaluation calls a real LLM; set "
             f"{ENV_FLAG}=1 along with LLM_PROVIDER / LLM_MODEL_ID to run it."
         )
         return 0
-    results = run_cases(llm or build_llm())
+    # A bare ReviewAgent resolves its provider from LLM_PROVIDER, so the
+    # model under evaluation is chosen by configuration, not by this script.
+    results = run_cases(agent or ReviewAgent())
     print(report(results))
     return 0
 

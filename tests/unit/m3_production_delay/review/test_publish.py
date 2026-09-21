@@ -13,7 +13,7 @@ import math
 
 import pytest
 
-from conftest import approving_judge, make_component, make_op, unparsable_judge
+from conftest import approving_agent, make_component, make_op, unparsable_agent
 from m3_production_delay.review.pipeline import review_job, review_jobs
 from m3_production_delay.review.publish import (
     ADVISORY_KEY,
@@ -33,7 +33,7 @@ from maxxflow_core.jsonutil import json_default
 
 @pytest.fixture
 def insight(section1_job, weights, threshold):
-    return review_job(section1_job, weights, threshold, approving_judge)
+    return review_job(section1_job, weights, threshold, approving_agent())
 
 
 # ─── payload shape ───────────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ def test_a_zero_stock_job_still_serialises(weights, threshold):
         predicted_overrun_hours=2.0, components=[make_component(100, 0)],
     )
     insight = review_job(
-        {"job_id": "WH/MO/02300", "operations": [op]}, weights, threshold, approving_judge
+        {"job_id": "WH/MO/02300", "operations": [op]}, weights, threshold, approving_agent()
     )
     encoded = json.dumps(advisory_payload(insight), default=json_default, allow_nan=False)
 
@@ -112,8 +112,8 @@ def test_round_trips_through_json(insight):
 def test_only_the_three_unvalidated_statuses_are_audited(
     section1_job, weights, threshold
 ):
-    approved = review_job(section1_job, weights, threshold, approving_judge)
-    fallback = review_job(section1_job, weights, threshold, unparsable_judge)
+    approved = review_job(section1_job, weights, threshold, approving_agent())
+    fallback = review_job(section1_job, weights, threshold, unparsable_agent())
     suppressed = review_job(
         {
             "job_id": "WH/MO/02400",
@@ -126,7 +126,7 @@ def test_only_the_three_unvalidated_statuses_are_audited(
                 )
             ],
         },
-        weights, threshold, approving_judge,
+        weights, threshold, approving_agent(),
     )
 
     assert approved.needs_audit is False
@@ -138,7 +138,7 @@ def test_only_the_three_unvalidated_statuses_are_audited(
 def test_audit_metadata_explains_why_without_quoting_line_text(
     section1_job, weights, threshold
 ):
-    insight = review_job(section1_job, weights, threshold, unparsable_judge)
+    insight = review_job(section1_job, weights, threshold, unparsable_agent())
     metadata = _audit_metadata(insight)
 
     assert metadata["job_reference"] == "WH/MO/00142"
@@ -156,7 +156,7 @@ def test_audit_metadata_explains_why_without_quoting_line_text(
 
 
 def test_dry_run_touches_no_database(section1_job, weights, threshold):
-    insights = review_jobs([section1_job], weights, threshold, approving_judge)
+    insights = review_jobs([section1_job], weights, threshold, approving_agent())
     # No DATA_DB_URL, no Postgres: a dry run that reached get_data_access()
     # would fail here rather than return.
     assert publish_insights(insights, tenant="demo", dry_run=True) == 1

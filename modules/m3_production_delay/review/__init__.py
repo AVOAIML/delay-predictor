@@ -1,23 +1,23 @@
-"""M3 Section 3 — Review Agent & Validated AI Insight.
+"""M3 Section 3 — Validated AI Insight (the deterministic half).
 
-The LLM-as-a-judge layer over the Risk Engine's output: deterministic evidence
-from a scored job, template explanation lines, deterministic validators, and
-then one LLM call that is only ever asked a yes/no question about whether each
-line is supported by that evidence.
+Evidence from a scored job, template explanation lines, deterministic
+validators, and the writeback. The judging call itself is not here: it belongs
+to :mod:`m3_production_delay.llm_agents.review_agent`, and is composed with
+this package by :class:`~m3_production_delay.orchestrator
+.ProductionDelayOrchestrator`, the same way the Weight Agent is.
 
-No number, signal or line of user-facing text is ever produced by the LLM — it
-can approve lines, or cause them to be dropped, and nothing else. If the judge
-cannot be reached, cannot be parsed, or keeps refusing, the deterministic
-templates ship as ``fallback_template``: the panel degrades to the explanation
-that already passed every deterministic check, never to silence.
+That split is the design, not an accident of layout. Nothing in this package
+calls an LLM, and the agent it hands drafts to can only answer yes/no about
+lines this package already wrote — so "no number is ever produced by a
+language model" is a property of the dependency direction rather than of a
+prompt instruction. If the judge cannot be reached, cannot be parsed, or keeps
+refusing, these deterministic templates ship as ``fallback_template``.
 
-See ``review/README.md`` for the input/output contract and how to run one job
-end to end.
+See ``review/README.md`` for the contract and how to run one job end to end.
 """
 
 from m3_production_delay.review.composer import compose
 from m3_production_delay.review.evidence import build_evidence
-from m3_production_delay.review.judge import build_llm, judge_draft
 from m3_production_delay.review.pipeline import review_job, review_jobs, run
 from m3_production_delay.review.publish import advisory_payload, publish_insights
 from m3_production_delay.review.schemas import (
@@ -34,8 +34,6 @@ __all__ = [
     "build_evidence",
     "compose",
     "validate",
-    "build_llm",
-    "judge_draft",
     "review_job",
     "review_jobs",
     "run",

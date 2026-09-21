@@ -10,6 +10,24 @@ yes/no about lines the deterministic composer already wrote. That is a
 property of the code's shape, not of the prompt: `composer.py` is the only
 writer of a line, and `JudgeVerdict` has no field that could carry one.
 
+## Where the code lives
+
+Section 3 is split the same way the Weight Agent is — the agent under
+`llm_agents/`, everything deterministic beside it, and both composed by the
+orchestrator:
+
+| | |
+|---|---|
+| **`llm_agents/review_agent/`** | The agent. Config, verdict models, exceptions, tracer, and `ReviewAgent.judge()` — the one LLM call. |
+| **`review/`** (this package) | Everything deterministic: evidence, composition, validators, the pipeline and the writeback. Calls no LLM at all. |
+| **`orchestrator.py`** | Builds both agents and exposes `review_jobs()` beside `resolve_weights()` / `resolve_risk_weights()`. |
+| **`prompt/review_judge_{system,user}.txt`** | The judge's prompts, beside the Weight Agent's two. |
+
+The dependency runs `review/` → `llm_agents/review_agent/` and never back:
+the agent is handed an evidence pack and a draft, reads them, and returns its
+own verdict. That direction is what makes "no number is ever produced by a
+language model" structural rather than a prompt instruction.
+
 ---
 
 ## Pipeline
@@ -37,7 +55,7 @@ writer of a line, and `JudgeVerdict` has no field that could carry one.
                         |
                         no
                         v
-               judge.judge_draft()  ── ONE LLM call ──> JudgeVerdict
+            ReviewAgent.judge()  ── ONE LLM call ──> JudgeVerdict
                         |
             approved? --yes--> "approved" / "approved_with_warnings"
                         |
@@ -57,14 +75,14 @@ writer of a line, and `JudgeVerdict` has no field that could carry one.
 
 ## Input contract
 
-`review_job(job, weights, threshold, llm)`
+`review_job(job, weights, threshold, agent)`
 
 | Argument | What it is |
 |---|---|
 | `job` | One element of `calculate_delay_elements_for_jobs()`'s output — a `{job_id, operations[...]}` dict with the element keys attached. A raw `build_job_rollups()` job is rejected with an explicit error. |
 | `weights` | The tenant's resolved `risk_weights` — the same vector that produced the scores. Keys are the rule engine's own signal names. It does **not** sum to 1.0 (the Weight Agent's `seasonality` share has no rule-engine equivalent), and nothing here assumes it does. |
-| `threshold` | The composite score above which a job counts as delayed. **Required at every level** — there is no default anywhere in Section 3, because the same score means different things for different tenants. |
-| `llm` | `Callable[[system_prompt, user_prompt], str]`. Build one with `judge.build_llm()`, or pass a scripted function in tests. |
+| `threshold` | The composite score above which a job counts as delayed. **Required at every level** — there is no default anywhere in Section 3, because the same score means different things for different tenants. It must be the cutoff the engine scored with: the engine's `is_delayed` flags are baked into the job, so reviewing at a different one is refused with an explicit error rather than publishing a badge attributed to a number that never produced it. |
+| `agent` | A `ReviewAgent`. The orchestrator builds one; tests inject a scripted `LLMProvider` into it. Its config owns the attempt budget, so the number of calls the pipeline can spend is stated in one place. |
 
 ### What Section 3 derives on its own side
 
@@ -161,8 +179,10 @@ a short component is a fact about the warehouse, independent of the badge.
 
 **`LLM_PROVIDER=stub` always produces `fallback_template`.** The stub provider
 returns prose, not JSON, which parses as `approved=False` with a
-`parse_error`. That is the intended degraded path, and it is why the offline
-test suite never sees an `approved` status without a scripted judge.
+`parse_error`. Setting `M3_REVIEW_AGENT_LLM_ENABLED=false` does the same thing
+without spending a call. Both are the intended degraded path, and it is why
+the offline test suite never sees an `approved` status without a scripted
+judge.
 
 **A delayed job can have no why-lines.** The composite is a weighted mean of
 raw ratios, so one signal sitting between 1.0 and its own baseline (an
@@ -196,31 +216,55 @@ All deterministic, all run before the judge. Only `error` rejects.
 
 ## Wiring the LLM
 
-The judge takes a plain callable, so nothing in the pipeline depends on a
-provider type:
+Normal use goes through the orchestrator, which builds the agent and resolves
+the weights the scores were produced with:
 
 ```python
-from m3_production_delay.review import review_job
-from m3_production_delay.review.judge import build_llm
+from m3_production_delay.orchestrator import ProductionDelayOrchestrator
 
-insight = review_job(scored_job, weights, threshold, build_llm())
+orchestrator = ProductionDelayOrchestrator()
+insights = orchestrator.review_jobs(scored_jobs, weights=weights, threshold=1.0)
 ```
 
-`build_llm()` wraps `maxxflow_providers.get_llm_provider()` — the same port
-the Weight Agent's two calls use — at temperature 0, seed 0, `max_tokens=900`,
-logging provider, latency and sizes (never prompt or response bodies). Select
-a real provider through the existing settings: `LLM_PROVIDER=openai` or
-`azure_openai`, plus `LLM_MODEL_ID` and the matching credentials.
+The agent can also be built directly, and a scripted `LLMProvider` injected —
+which is how every test drives it, and the same pattern
+`orchestrator._DemoScriptedLLMProvider` uses for the Weight Agent:
+
+```python
+from m3_production_delay.llm_agents.review_agent import ReviewAgent
+from m3_production_delay.review import review_job
+
+insight = review_job(scored_job, weights, threshold, ReviewAgent())
+```
+
+`ReviewAgent` resolves its provider from `maxxflow_providers.get_llm_provider()`
+— the same port the Weight Agent's two calls use — at temperature 0, seed 0,
+`max_tokens=900`, logging provider, latency and sizes but never prompt or
+response bodies. One `llm_provider` passed to the orchestrator covers every
+LLM call M3 makes.
+
+### Selecting a model
+
+| Setting | Value |
+|---|---|
+| `LLM_PROVIDER` | `azure_ai` for Azure AI Foundry, `azure_openai` / `openai` for the OpenAI data plane, `stub` (default) for offline |
+| `AZURE_AI_API_KEY` | Foundry key |
+| `AZURE_AI_API_BASE` | `https://<resource>.services.ai.azure.com` (the `/models` inference route is appended when the base carries no path of its own) |
+| `LLM_MODEL_ID` | the Foundry **deployment name**, exactly as the deployment list shows it — not the vendor's model name, and never guessed |
+
+Foundry and Azure OpenAI are different data planes with different
+credentials: the `AZURE_OPENAI_*` settings cannot serve a Foundry deployment,
+which is why `LLM_PROVIDER=azure_ai` exists as its own adapter. Put the
+credentials in `.env.local` (git-ignored), not in a profile.
+
+Two switches control the agent itself: `M3_REVIEW_AGENT_LLM_ENABLED=false`
+skips the call entirely (publishing `fallback_template`), and
+`M3_REVIEW_AGENT_TRACE_ENABLED` / `M3_REVIEW_AGENT_TRACE_INCLUDE_CONTENT` are
+the only path through which the judge's raw prompt or response is ever logged.
 
 Prompts live in `modules/m3_production_delay/prompt/` beside the module's other
 two: `review_judge_system.txt` (the five checks) and `review_judge_user.txt`
 (evidence pack + indexed candidate lines).
-
-Any other callable works — tests pass scripted functions:
-
-```python
-insight = review_job(job, weights, threshold, lambda system, user: '{"approved": true, "lines": [...]}')
-```
 
 ---
 
@@ -244,10 +288,10 @@ Without a live Postgres, review a job in process instead:
 uv run python -c "
 import json, pathlib
 from m3_production_delay.review import review_job
-from m3_production_delay.review.judge import build_llm
+from m3_production_delay.llm_agents.review_agent import ReviewAgent
 job = json.loads(pathlib.Path('modules/m3_production_delay/review/fixtures/section1_job.json').read_text())
 weights = {'time_overrun_ratio': 0.40, 'operator_pace_ratio': 0.30, 'material_shortfall_ratio': 0.15, 'supplier_reliability': 0.05}
-insight = review_job(job, weights, 1.0, build_llm())
+insight = review_job(job, weights, 1.0, ReviewAgent())
 print(insight.status)
 for line in insight.why_lines:
     print(' -', line.text)
@@ -257,7 +301,7 @@ for line in insight.why_lines:
 ### Tests
 
 ```bash
-uv run --extra dev pytest tests/unit/m3_production_delay/review -q
+uv run --extra dev pytest tests/unit/m3_production_delay/review tests/unit/m3_production_delay/review_agent -q
 ```
 
 Offline, no network, no database. The judge is always a scripted callable.
@@ -296,12 +340,21 @@ can call a paid API by accident.
 
 | File | Purpose |
 |---|---|
-| `schemas.py` | Frozen dataclasses with `__post_init__` validation and `to_dict()`/`from_dict()`. No non-finite number is constructible. |
+| `schemas.py` | Frozen dataclasses with `__post_init__` validation and `to_dict()`/`from_dict()`. No non-finite number is constructible. Re-exports the agent's verdict types. |
 | `evidence.py` | `build_evidence(job, weights, threshold)` — the only reader of the Risk Engine's output shape. |
 | `composer.py` | Template lines, one per fired weighted signal, ordered by contribution. No LLM. |
 | `validators.py` | Every deterministic check, run before the judge. |
-| `judge.py` | `build_llm()` adapter, prompt assembly, one call, strict verdict parsing. |
 | `pipeline.py` | `review_job` / `review_jobs`, plus the tenant batch entry point and CLI. |
 | `publish.py` | `customElements` merge and `audit_logs` writeback. |
 | `fixtures/` | A recorded real Section 1 output and the script that regenerates it. |
 | `eval/` | The judge evaluation set, its builder, and the opt-in runner. |
+
+And the agent, in `llm_agents/review_agent/`:
+
+| File | Purpose |
+|---|---|
+| `config.py` | `ReviewAgentConfig` + cached singleton — token budget, attempt budget, temperature/seed, enabled flag. |
+| `models.py` | `JudgeVerdict` / `JudgeLineVerdict` — the agent's own output contract, capped and validated. |
+| `resolver.py` | `ReviewAgent.judge()` — prompt assembly, the one call, strict verdict parsing. |
+| `tracing.py` | Opt-in, two-switch execution trace. |
+| `exceptions.py` | `ReviewAgentError`, `ReviewConfigError`, `JudgeResponseError`. |

@@ -33,9 +33,9 @@ from maxxflow_core.clock import get_clock
 from maxxflow_core.errors import get_logger
 from maxxflow_core.jsonutil import json_default
 
+from m3_production_delay.llm_agents.review_agent import ReviewAgent
 from m3_production_delay.review.composer import compose
 from m3_production_delay.review.evidence import build_evidence
-from m3_production_delay.review.judge import LLMCallable, build_llm, judge_draft
 from m3_production_delay.review.publish import MODEL_VERSION, advisory_payload, publish_insights
 from m3_production_delay.review.schemas import (
     SEVERITY_WARNING,
@@ -54,10 +54,6 @@ from m3_production_delay.review.schemas import (
 from m3_production_delay.review.validators import validate
 
 log = get_logger("m3_production_delay.review.pipeline")
-
-#: One judging call, plus at most one re-judge after dropping the lines the
-#: first verdict would not support.
-MAX_JUDGE_ATTEMPTS = 2
 
 
 def _insight(
@@ -90,10 +86,17 @@ def _insight(
 
 
 def review_job(
-    job: dict, weights: dict[str, float], threshold: float, llm: LLMCallable
+    job: dict, weights: dict[str, float], threshold: float, agent: ReviewAgent
 ) -> ValidatedInsight:
     """Review one scored job — one element of
-    ``calculate_delay_elements_for_jobs()``'s output."""
+    ``calculate_delay_elements_for_jobs()``'s output.
+
+    ``agent`` is a :class:`~m3_production_delay.llm_agents.review_agent
+    .ReviewAgent`; the orchestrator builds one, and tests inject a scripted
+    ``LLMProvider`` into it the way ``test_m3_full_pipeline`` does for the
+    Weight Agent. The attempt budget comes from the agent's own config, so
+    the number of calls this loop can spend is stated in exactly one place.
+    """
     pack = build_evidence(job, weights, threshold)
 
     if not pack.scorable_operations:
@@ -120,13 +123,14 @@ def review_job(
     judged = draft
     verdict = JudgeVerdict(approved=False, skipped=True)
     attempts = 0
-    for attempt in range(1, MAX_JUDGE_ATTEMPTS + 1):
+    max_attempts = agent.config.max_attempts
+    for attempt in range(1, max_attempts + 1):
         attempts = attempt
-        verdict = judge_draft(pack, judged, llm)
+        verdict = agent.judge(pack, judged)
         if verdict.approved:
             break
         unsupported = set(verdict.unsupported_indices)
-        if not unsupported or attempt == MAX_JUDGE_ATTEMPTS:
+        if not unsupported or attempt == max_attempts:
             break
         kept = tuple(line for line in judged.why_lines if line.index not in unsupported)
         issues += (
@@ -173,12 +177,12 @@ def review_job(
 
 
 def review_jobs(
-    jobs: list[dict], weights: dict[str, float], threshold: float, llm: LLMCallable
+    jobs: list[dict], weights: dict[str, float], threshold: float, agent: ReviewAgent
 ) -> list[ValidatedInsight]:
     """Review every scored job in a batch. One job's evidence, verdict and
     failures never affect another's — the batch is a loop, not a shared
     context."""
-    insights = [review_job(job, weights, threshold, llm) for job in jobs]
+    insights = [review_job(job, weights, threshold, agent) for job in jobs]
     by_status: dict[str, int] = {}
     for insight in insights:
         by_status[insight.status] = by_status.get(insight.status, 0) + 1
@@ -201,11 +205,17 @@ def run(
 ) -> list[ValidatedInsight]:
     """Score, review and publish every (or some) job for one tenant.
 
-    Weights come from the Weight Agent through the existing orchestrator, so
-    the review explains the same vector the scores were produced with. A
-    tenant with no computable signal at all raises
-    ``AllSignalsUnavailableError`` from that call, unchanged — there is no
-    weight vector to substitute for it.
+    This function owns the IO — the tenant read, the rollup, the writeback —
+    and nothing else. Both agents are reached through
+    :class:`~m3_production_delay.orchestrator.ProductionDelayOrchestrator`,
+    which is where agent composition lives: weights from the Weight Agent,
+    then the review from the Review Agent, over the scores that same weight
+    vector produced.
+
+    A tenant with no computable signal at all raises
+    ``AllSignalsUnavailableError`` from the weight call, unchanged — there is
+    no weight vector to substitute for it, so there is nothing to explain
+    either.
     """
     from m3_production_delay.llm_agents.weight_agent.models import SIGNAL_ORDER
     from m3_production_delay.orchestrator import ProductionDelayOrchestrator, WeightAgentRequest
@@ -228,7 +238,7 @@ def run(
     scored = calculate_delay_elements_for_jobs(
         rollups, risk_weights=weights, delay_threshold=threshold
     )
-    insights = review_jobs(scored, weights, threshold, build_llm())
+    insights = orchestrator.review_jobs(scored, weights=weights, threshold=threshold)
     publish_insights(insights, tenant=tenant, dry_run=dry_run)
     return insights
 

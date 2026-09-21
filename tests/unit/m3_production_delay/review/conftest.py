@@ -8,11 +8,12 @@ than re-declared: a second copy would be free to drift from the rollup shape
 the rule engine really produces, which is exactly the thing these tests exist
 to check against.
 
-Every test in this package is offline. The judge is always a plain scripted
-callable — a function returning fixed JSON — never a mock: the same style the
-existing M3 tests use for the Weight Agent's LLM calls
-(``orchestrator._DemoScriptedLLMProvider``), and the only style that exercises
-the real parsing path.
+Every test in this package is offline. The judge is always a real
+:class:`ReviewAgent` driven by a scripted ``LLMProvider`` — a class returning
+fixed text — never a mock. That is the same style the existing M3 tests use
+for the Weight Agent's LLM calls (``orchestrator._DemoScriptedLLMProvider``),
+and the only style that exercises the agent's real prompt assembly and
+verdict parsing rather than asserting that a function was called.
 """
 
 from __future__ import annotations
@@ -23,6 +24,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+from m3_production_delay.llm_agents.review_agent import ReviewAgent, build_config
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _ELEMENTS_TESTS = _REPO_ROOT / "tests" / "rule_engine" / "test_m3_elements.py"
@@ -82,9 +85,41 @@ def section1_job() -> dict:
     return json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 
 
-def approving_judge(system_prompt: str, user_prompt: str) -> str:
-    """Scripted judge that supports every candidate line it is shown."""
-    count = user_prompt.count("] signal=")
+class ScriptedProvider:
+    """A deterministic stand-in for a real :class:`LLMProvider`, built the
+    same way ``orchestrator._DemoScriptedLLMProvider`` is: it answers the one
+    call the agent makes with fixed text, so the agent's own prompt assembly,
+    JSON parsing and schema checks all run for real.
+
+    ``responder`` receives the combined prompt the port is given and returns
+    the raw response text.
+    """
+
+    name = "scripted (test only)"
+
+    def __init__(self, responder) -> None:
+        self._responder = responder
+        self.calls: list[str] = []
+
+    def generate(self, prompt: str, *, max_tokens: int = 256, generation_config=None) -> str:
+        self.calls.append(prompt)
+        return self._responder(prompt)
+
+
+def agent_for(responder, **config_overrides) -> ReviewAgent:
+    """A real ReviewAgent wired to a scripted provider."""
+    return ReviewAgent(
+        llm_provider=ScriptedProvider(responder),
+        config=build_config(llm_enabled=True, **config_overrides),
+    )
+
+
+def _line_count(prompt: str) -> int:
+    """How many candidate lines the agent put in front of the judge."""
+    return prompt.count("] signal=")
+
+
+def _approve_all(prompt: str) -> str:
     return json.dumps(
         {
             "approved": True,
@@ -95,7 +130,7 @@ def approving_judge(system_prompt: str, user_prompt: str) -> str:
                     "evidence_ref": "operations[].signals[]",
                     "issue": None,
                 }
-                for i in range(count)
+                for i in range(_line_count(prompt))
             ],
             "unsupported_claims": [],
             "omitted_signals": [],
@@ -103,52 +138,81 @@ def approving_judge(system_prompt: str, user_prompt: str) -> str:
     )
 
 
-def rejecting_judge(*unsupported_indices: int):
-    """Scripted judge that refuses the given line indices every time it is
-    called — including the re-judge, so the retry path terminates in
-    ``fallback_template`` rather than looping."""
-
-    def judge(system_prompt: str, user_prompt: str) -> str:
-        count = user_prompt.count("] signal=")
-        refuse = set(unsupported_indices) if unsupported_indices else {0}
-        return json.dumps(
-            {
-                "approved": False,
-                "lines": [
-                    {
-                        "line_index": i,
-                        "supported": i not in refuse,
-                        "evidence_ref": None,
-                        "issue": "not supported by the evidence" if i in refuse else None,
-                    }
-                    for i in range(count)
-                ],
-                "unsupported_claims": ["line is not supported by the evidence"],
-                "omitted_signals": [],
-            }
-        )
-
-    return judge
+def _refuse(prompt: str, unsupported_indices) -> str:
+    refuse = set(unsupported_indices) if unsupported_indices else {0}
+    return json.dumps(
+        {
+            "approved": False,
+            "lines": [
+                {
+                    "line_index": i,
+                    "supported": i not in refuse,
+                    "evidence_ref": None,
+                    "issue": "not supported by the evidence" if i in refuse else None,
+                }
+                for i in range(_line_count(prompt))
+            ],
+            "unsupported_claims": ["line is not supported by the evidence"],
+            "omitted_signals": [],
+        }
+    )
 
 
-def rejecting_once_judge(*unsupported_indices: int):
-    """Refuses on the first call and approves whatever survives on the second
-    — the drop-and-re-judge path."""
+def approving_agent() -> ReviewAgent:
+    """Supports every candidate line it is shown."""
+    return agent_for(_approve_all)
+
+
+def rejecting_agent(*unsupported_indices: int) -> ReviewAgent:
+    """Refuses the given line indices every time it is called — including the
+    re-judge, so the retry path terminates in ``fallback_template`` rather
+    than looping."""
+    return agent_for(lambda prompt: _refuse(prompt, unsupported_indices))
+
+
+def rejecting_once_agent(*unsupported_indices: int) -> ReviewAgent:
+    """Refuses on the first call and approves whatever survives on the
+    second — the drop-and-re-judge path."""
     state = {"calls": 0}
 
-    def judge(system_prompt: str, user_prompt: str) -> str:
+    def responder(prompt: str) -> str:
         state["calls"] += 1
         if state["calls"] == 1:
-            return rejecting_judge(*unsupported_indices)(system_prompt, user_prompt)
-        return approving_judge(system_prompt, user_prompt)
+            return _refuse(prompt, unsupported_indices)
+        return _approve_all(prompt)
 
-    return judge
+    return agent_for(responder)
 
 
-def unparsable_judge(system_prompt: str, user_prompt: str) -> str:
+def unparsable_agent() -> ReviewAgent:
     """What the default ``StubLLMProvider`` actually returns: prose, not JSON."""
-    return "[stub-llm:0f1e2d3c] Suggested explanation for: You are a reviewer"
+    return agent_for(
+        lambda prompt: "[stub-llm:0f1e2d3c] Suggested explanation for: You are a reviewer"
+    )
 
 
-def exploding_judge(system_prompt: str, user_prompt: str) -> str:
-    raise TimeoutError("provider timed out")
+def responding_agent(response: str) -> ReviewAgent:
+    """Answers with one fixed response, whatever it is asked."""
+    return agent_for(lambda prompt: response)
+
+
+class _ExplodingProvider(ScriptedProvider):
+    def __init__(self) -> None:
+        super().__init__(lambda prompt: "")
+
+    def generate(self, prompt: str, *, max_tokens: int = 256, generation_config=None) -> str:
+        raise TimeoutError("provider timed out")
+
+
+def exploding_agent() -> ReviewAgent:
+    """A provider that cannot be reached at all."""
+    return ReviewAgent(llm_provider=_ExplodingProvider(), config=build_config(llm_enabled=True))
+
+
+def never_called_agent() -> ReviewAgent:
+    """Fails the test if the agent is asked anything."""
+
+    def responder(prompt: str) -> str:
+        raise AssertionError("the judge must not be called on this path")
+
+    return agent_for(responder)

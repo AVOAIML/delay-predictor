@@ -1,10 +1,10 @@
 """Pipeline: how each judge outcome maps to a status, and the two paths that
 never reach the judge at all.
 
-Every judge here is a scripted callable returning fixed text — the real
-parsing path runs in each case, which is the point: a mock would assert that
-``judge_draft`` was called, and what matters is what the pipeline does with
-what comes back.
+Every judge here is a real ReviewAgent driven by a scripted provider, so the
+agent's own prompt assembly and verdict parsing run in each case. That is the
+point: a mock would assert that the agent was called, and what matters is what
+the pipeline does with what comes back.
 """
 
 from __future__ import annotations
@@ -15,17 +15,20 @@ import json
 import pytest
 
 from conftest import (
-    approving_judge,
-    exploding_judge,
+    agent_for,
+    approving_agent,
+    exploding_agent,
     make_component,
     make_op,
-    rejecting_judge,
-    rejecting_once_judge,
-    unparsable_judge,
+    never_called_agent,
+    rejecting_agent,
+    rejecting_once_agent,
+    responding_agent,
+    unparsable_agent,
 )
 from m3_production_delay.review.composer import compose
 from m3_production_delay.review.evidence import build_evidence
-from m3_production_delay.review.judge import build_llm, judge_draft
+from m3_production_delay.llm_agents.review_agent import ReviewAgent, build_config
 from m3_production_delay.review.pipeline import review_job, review_jobs
 from m3_production_delay.review.schemas import (
     STATUS_APPROVED,
@@ -45,7 +48,7 @@ def _checks(insight) -> set[str]:
 
 
 def test_an_approved_insight_keeps_every_template_line(section1_job, weights, threshold):
-    insight = review_job(section1_job, weights, threshold, approving_judge)
+    insight = review_job(section1_job, weights, threshold, approving_agent())
 
     # The fixture's not-started operation carries a plausibility warning, so
     # the clean status here is "approved_with_warnings" rather than "approved".
@@ -64,7 +67,7 @@ def test_a_warning_free_job_is_plainly_approved(weights, threshold):
         predicted_overrun_hours=2.0,
     )
     insight = review_job(
-        {"job_id": "WH/MO/02000", "operations": [op]}, weights, threshold, approving_judge
+        {"job_id": "WH/MO/02000", "operations": [op]}, weights, threshold, approving_agent()
     )
     assert insight.status == STATUS_APPROVED
     assert insight.issues == ()
@@ -73,7 +76,7 @@ def test_a_warning_free_job_is_plainly_approved(weights, threshold):
 def test_an_unsupported_line_is_dropped_and_the_rest_re_judged(
     section1_job, weights, threshold
 ):
-    insight = review_job(section1_job, weights, threshold, rejecting_once_judge(0))
+    insight = review_job(section1_job, weights, threshold, rejecting_once_agent(0))
 
     assert insight.status == STATUS_APPROVED_WITH_WARNINGS
     assert insight.attempts == 2
@@ -85,7 +88,7 @@ def test_an_unsupported_line_is_dropped_and_the_rest_re_judged(
 def test_a_judge_that_keeps_refusing_falls_back_to_the_full_template(
     section1_job, weights, threshold
 ):
-    insight = review_job(section1_job, weights, threshold, rejecting_judge(0))
+    insight = review_job(section1_job, weights, threshold, rejecting_agent(0))
 
     assert insight.status == STATUS_FALLBACK_TEMPLATE
     assert insight.attempts == 2
@@ -97,7 +100,7 @@ def test_a_judge_that_keeps_refusing_falls_back_to_the_full_template(
 
 
 def test_an_unparsable_verdict_is_never_read_as_approval(section1_job, weights, threshold):
-    insight = review_job(section1_job, weights, threshold, unparsable_judge)
+    insight = review_job(section1_job, weights, threshold, unparsable_agent())
 
     assert insight.status == STATUS_FALLBACK_TEMPLATE
     assert insight.judge.approved is False
@@ -106,7 +109,7 @@ def test_an_unparsable_verdict_is_never_read_as_approval(section1_job, weights, 
 
 
 def test_a_provider_failure_degrades_to_the_template(section1_job, weights, threshold):
-    insight = review_job(section1_job, weights, threshold, exploding_judge)
+    insight = review_job(section1_job, weights, threshold, exploding_agent())
 
     assert insight.status == STATUS_FALLBACK_TEMPLATE
     assert insight.judge.parse_error.startswith("provider_error")
@@ -118,7 +121,7 @@ def test_the_default_stub_provider_always_produces_a_fallback(
 ):
     # LLM_PROVIDER=stub returns prose, not JSON. Documented behaviour, and the
     # reason CI never sees an "approved" status without a scripted judge.
-    insight = review_job(section1_job, weights, threshold, build_llm())
+    insight = review_job(section1_job, weights, threshold, ReviewAgent())
     assert insight.status == STATUS_FALLBACK_TEMPLATE
 
 
@@ -133,11 +136,8 @@ def test_a_job_with_nothing_scorable_is_suppressed(weights, threshold):
         status="NOT_STARTED", components=[make_component(100, 40)],
     )
 
-    def never_called(system_prompt, user_prompt):
-        raise AssertionError("the judge must not be called for a suppressed job")
-
     insight = review_job(
-        {"job_id": "WH/MO/02100", "operations": [op]}, weights, threshold, never_called
+        {"job_id": "WH/MO/02100", "operations": [op]}, weights, threshold, never_called_agent()
     )
 
     assert insight.status == STATUS_SUPPRESSED_NOT_SCORABLE
@@ -169,10 +169,7 @@ def test_a_validator_error_rejects_without_calling_the_judge(
 
     monkeypatch.setattr("m3_production_delay.review.pipeline.compose", tampering_compose)
 
-    def never_called(system_prompt, user_prompt):
-        raise AssertionError("a draft that fails validation must never be judged")
-
-    insight = review_job(section1_job, weights, threshold, never_called)
+    insight = review_job(section1_job, weights, threshold, never_called_agent())
 
     assert insight.status == STATUS_REJECTED
     assert insight.why_lines == ()
@@ -189,7 +186,7 @@ def test_delayed_with_no_fired_signal_ships_the_summary_alone(weights, threshold
         predicted_overrun_hours=1.0,
     )
     insight = review_job(
-        {"job_id": "WH/MO/02200", "operations": [op]}, weights, threshold, approving_judge
+        {"job_id": "WH/MO/02200", "operations": [op]}, weights, threshold, approving_agent()
     )
 
     assert insight.status == STATUS_APPROVED_WITH_WARNINGS
@@ -223,7 +220,7 @@ def drafted(section1_job, weights, threshold):
 )
 def test_every_malformed_verdict_is_unapproved(drafted, response, expected_error):
     pack, draft = drafted
-    verdict = judge_draft(pack, draft, lambda system, user: response)
+    verdict = responding_agent(response).judge(pack, draft)
     assert verdict.approved is False
     assert expected_error in verdict.parse_error
 
@@ -236,7 +233,7 @@ def test_a_duplicate_line_index_is_rejected(drafted):
             "lines": [{"line_index": 0, "supported": True}] * 2,
         }
     )
-    verdict = judge_draft(pack, draft, lambda system, user: response)
+    verdict = responding_agent(response).judge(pack, draft)
     assert "duplicate_line_index" in verdict.parse_error
 
 
@@ -253,7 +250,7 @@ def test_an_approval_that_contradicts_itself_is_read_conservatively(drafted):
             "omitted_signals": [],
         }
     )
-    verdict = judge_draft(pack, draft, lambda system, user: response)
+    verdict = responding_agent(response).judge(pack, draft)
 
     assert verdict.approved is False  # the dissent wins, not the blanket yes
     assert verdict.unsupported_indices == (1,)
@@ -271,38 +268,33 @@ def test_a_claimed_omission_blocks_approval(drafted):
             "omitted_signals": ["material_shortfall_ratio"],
         }
     )
-    verdict = judge_draft(pack, draft, lambda system, user: response)
+    verdict = responding_agent(response).judge(pack, draft)
     assert verdict.approved is False
     assert verdict.omitted_signals == ("material_shortfall_ratio",)
 
 
 def test_the_prompt_carries_the_evidence_and_the_indexed_lines(drafted):
     pack, draft = drafted
-    seen = {}
+    agent = approving_agent()
+    agent.judge(pack, draft)
 
-    def capturing(system_prompt, user_prompt):
-        seen["system"] = system_prompt
-        seen["user"] = user_prompt
-        return approving_judge(system_prompt, user_prompt)
-
-    judge_draft(pack, draft, capturing)
-
-    assert "EVIDENCE PACK" in seen["user"]
-    assert pack.job_id in seen["user"]
-    assert all(f"[{line.index}] signal=" in seen["user"] for line in draft.why_lines)
-    assert "fired" in seen["system"].lower()
+    # The platform's LLMProvider port takes a single prompt, so the agent
+    # concatenates its two halves; the provider records what it was actually
+    # sent.
+    prompt = agent._llm_provider.calls[0]
+    assert "EVIDENCE PACK" in prompt
+    assert pack.job_id in prompt
+    assert all(f"[{line.index}] signal=" in prompt for line in draft.why_lines)
+    assert "fired" in prompt.lower()
     # The judge is told what NOT to check, so a missing recommendation can
     # never be read as a defect.
-    assert "recommendations" in seen["system"].lower()
+    assert "recommendations" in prompt.lower()
 
 
 def test_an_empty_draft_is_not_sent_to_the_judge(drafted):
     pack, draft = drafted
 
-    def never_called(system_prompt, user_prompt):
-        raise AssertionError("an empty draft has nothing to judge")
-
-    verdict = judge_draft(pack, draft.with_lines(()), never_called)
+    verdict = never_called_agent().judge(pack, draft.with_lines(()))
     assert verdict.approved is True
     assert verdict.skipped is True
 
@@ -313,7 +305,7 @@ def test_an_empty_draft_is_not_sent_to_the_judge(drafted):
 def test_review_jobs_reviews_every_job_independently(section1_job, weights, threshold):
     other = json.loads(json.dumps(section1_job))
     other["job_id"] = "WH/MO/00143"
-    insights = review_jobs([section1_job, other], weights, threshold, approving_judge)
+    insights = review_jobs([section1_job, other], weights, threshold, approving_agent())
 
     assert [i.job_id for i in insights] == ["WH/MO/00142", "WH/MO/00143"]
     assert {i.status for i in insights} == {STATUS_APPROVED_WITH_WARNINGS}
@@ -331,7 +323,7 @@ def test_one_failing_job_does_not_affect_the_next(section1_job, weights, thresho
             )
         ],
     }
-    insights = review_jobs([unscorable, section1_job], weights, threshold, approving_judge)
+    insights = review_jobs([unscorable, section1_job], weights, threshold, approving_agent())
 
     assert insights[0].status == STATUS_SUPPRESSED_NOT_SCORABLE
     assert insights[1].status == STATUS_APPROVED_WITH_WARNINGS

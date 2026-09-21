@@ -37,6 +37,16 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+# The verdict types belong to the Review Agent, which owns its own output
+# contract exactly as the Weight Agent owns WeightResolution. They are
+# re-exported here so a consumer of this module needs one import, not two —
+# the dependency runs review -> llm_agents.review_agent and never back.
+from m3_production_delay.llm_agents.review_agent.models import (  # noqa: F401
+    SKIPPED_VERDICT,
+    JudgeLineVerdict,
+    JudgeVerdict,
+)
+
 # --- vocabularies -----------------------------------------------------------
 
 #: Rule-engine signal keys this agent understands. The first four are the
@@ -711,101 +721,6 @@ class InsightDraft:
                 ComponentEvidence.from_dict(c) for c in payload.get("material_overrun") or ()
             ),
             source=payload.get("source", SOURCE_TEMPLATE),
-        )
-
-
-# --- verdict ----------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class JudgeLineVerdict:
-    """The judge's answer for ONE line. Deliberately yes/no plus short
-    diagnostics: there is no field here an LLM could use to introduce a
-    number, a signal value, or replacement prose."""
-
-    line_index: int
-    supported: bool
-    evidence_ref: str | None = None
-    issue: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.line_index < 0:
-            raise ValueError("line_index must be >= 0")
-        if not isinstance(self.supported, bool):
-            raise TypeError("supported must be a bool")
-
-    def to_dict(self) -> dict:
-        return {
-            "line_index": self.line_index,
-            "supported": self.supported,
-            "evidence_ref": self.evidence_ref,
-            "issue": self.issue,
-        }
-
-    @classmethod
-    def from_dict(cls, payload: dict) -> "JudgeLineVerdict":
-        return cls(
-            line_index=payload["line_index"],
-            supported=bool(payload["supported"]),
-            evidence_ref=payload.get("evidence_ref"),
-            issue=payload.get("issue"),
-        )
-
-
-@dataclass(frozen=True)
-class JudgeVerdict:
-    """The judge's whole response. ``parse_error`` is set by ``judge.py`` when
-    the model returned something that is not a valid verdict at all; in that
-    case ``approved`` is always False — an unreadable answer is never treated
-    as assent.
-
-    ``skipped`` marks the one case where no call was made because there was
-    nothing to judge (a draft with zero candidate lines): recorded explicitly
-    so "nobody asked" is distinguishable from "the judge approved".
-    """
-
-    approved: bool
-    lines: tuple[JudgeLineVerdict, ...] = ()
-    unsupported_claims: tuple[str, ...] = ()
-    omitted_signals: tuple[str, ...] = ()
-    parse_error: str | None = None
-    skipped: bool = False
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.approved, bool):
-            raise TypeError("approved must be a bool")
-        _tuple_of("lines", self.lines, JudgeLineVerdict)
-        _tuple_of("unsupported_claims", self.unsupported_claims, str)
-        _tuple_of("omitted_signals", self.omitted_signals, str)
-        if self.parse_error and self.approved:
-            raise ValueError("a verdict that failed to parse cannot be approved")
-        indices = [line.line_index for line in self.lines]
-        if len(indices) != len(set(indices)):
-            raise ValueError("duplicate line_index in verdict")
-
-    @property
-    def unsupported_indices(self) -> tuple[int, ...]:
-        return tuple(line.line_index for line in self.lines if not line.supported)
-
-    def to_dict(self) -> dict:
-        return {
-            "approved": self.approved,
-            "lines": [line.to_dict() for line in self.lines],
-            "unsupported_claims": list(self.unsupported_claims),
-            "omitted_signals": list(self.omitted_signals),
-            "parse_error": self.parse_error,
-            "skipped": self.skipped,
-        }
-
-    @classmethod
-    def from_dict(cls, payload: dict) -> "JudgeVerdict":
-        return cls(
-            approved=bool(payload["approved"]),
-            lines=tuple(JudgeLineVerdict.from_dict(line) for line in payload.get("lines") or ()),
-            unsupported_claims=tuple(payload.get("unsupported_claims") or ()),
-            omitted_signals=tuple(payload.get("omitted_signals") or ()),
-            parse_error=payload.get("parse_error"),
-            skipped=bool(payload.get("skipped", False)),
         )
 
 

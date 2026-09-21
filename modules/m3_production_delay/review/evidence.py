@@ -533,6 +533,33 @@ def _job_signals(
     )
 
 
+def _assert_threshold_matches(
+    job_id: str, operations: tuple[OperationEvidence, ...], threshold: float
+) -> None:
+    """The threshold handed in must be the one the Risk Engine scored with.
+
+    ``is_delayed`` is the engine's own verdict, baked in when the job was
+    scored; the summary and the validators compare it against ``threshold``.
+    Review a job at a different cutoff and every badge in the payload is
+    attributed to a number that did not produce it — so this is a caller
+    error, caught here with a message naming the cause, rather than a
+    downstream validator failure whose message would only describe the
+    symptom.
+    """
+    for op in operations:
+        score = op.composite_risk_score
+        if score is None or op.is_delayed is None:
+            continue  # nothing to compare — see the finiteness coercion above
+        if op.is_delayed != (score > threshold):
+            raise ValueError(
+                f"job {job_id!r} operation {op.operation_id!r} was scored is_delayed="
+                f"{op.is_delayed} at composite_risk_score={score}, which contradicts "
+                f"threshold={threshold}. Pass the same delay_threshold that "
+                "calculate_delay_elements_for_jobs() was called with — reviewing a job at a "
+                "different cutoff would attribute its badge to a number that did not produce it."
+            )
+
+
 def _summary_operation(
     operations: tuple[OperationEvidence, ...],
 ) -> OperationEvidence | None:
@@ -593,6 +620,7 @@ def build_evidence(job: dict, weights: dict[str, float], threshold: float) -> Ev
     operations = tuple(
         _operation_evidence(op, weights, issues) for op in (job.get("operations") or [])
     )
+    _assert_threshold_matches(job_id, operations, float(threshold))
     material_overrun = _material_overrun(operations)
     job_signals = _job_signals(operations, material_overrun, weights, issues)
     summary_score, summary_hours, summary_delayed = _summarise(operations)

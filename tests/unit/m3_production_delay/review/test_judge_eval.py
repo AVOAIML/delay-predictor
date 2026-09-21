@@ -17,7 +17,7 @@ import os
 
 import pytest
 
-from conftest import approving_judge, rejecting_judge, unparsable_judge
+from conftest import agent_for, approving_agent, rejecting_agent, unparsable_agent
 from m3_production_delay.review.eval.run_judge_eval import (
     CASES_PATH,
     ENV_FLAG,
@@ -127,20 +127,44 @@ def test_a_perfect_judge_scores_one(cases):
     # kind of case a judge has to read the evidence to catch.
     pending = iter(cases["cases"])
 
-    def oracle(system_prompt: str, user_prompt: str) -> str:
+    def _approve(prompt: str) -> str:
+        count = prompt.count("] signal=")
+        return json.dumps(
+            {
+                "approved": True,
+                "lines": [{"line_index": i, "supported": True} for i in range(count)],
+                "unsupported_claims": [],
+                "omitted_signals": [],
+            }
+        )
+
+    def _refuse(prompt: str, target: int) -> str:
+        count = prompt.count("] signal=")
+        return json.dumps(
+            {
+                "approved": False,
+                "lines": [
+                    {"line_index": i, "supported": i != target} for i in range(count)
+                ],
+                "unsupported_claims": ["not supported"],
+                "omitted_signals": [],
+            }
+        )
+
+    def oracle(prompt: str) -> str:
         case = next(pending)
-        assert user_prompt.count("] signal=") == len(case["lines"]), case["id"]
+        assert prompt.count("] signal=") == len(case["lines"]), case["id"]
         if case["expected_approved"]:
-            return approving_judge(system_prompt, user_prompt)
+            return _approve(prompt)
         target = case.get("target_index")
         if target is None:  # omission: every line is fine, the set is not
-            verdict = json.loads(approving_judge(system_prompt, user_prompt))
+            verdict = json.loads(_approve(prompt))
             verdict["approved"] = False
             verdict["omitted_signals"] = ["operator_pace_ratio"]
             return json.dumps(verdict)
-        return rejecting_judge(target)(system_prompt, user_prompt)
+        return _refuse(prompt, target)
 
-    metrics = score(run_cases(oracle, cases))
+    metrics = score(run_cases(agent_for(oracle), cases))
     assert metrics["precision"] == 1.0
     assert metrics["recall"] == 1.0
     assert metrics["accuracy"] == 1.0
@@ -148,14 +172,14 @@ def test_a_perfect_judge_scores_one(cases):
 
 
 def test_a_judge_that_refuses_everything_has_perfect_recall_and_poor_precision(cases):
-    metrics = score(run_cases(rejecting_judge(0), cases))
+    metrics = score(run_cases(rejecting_agent(0), cases))
     assert metrics["recall"] == 1.0
     assert metrics["precision"] == pytest.approx(0.5)
     assert metrics["false_positives"] == 10
 
 
 def test_an_unusable_provider_shows_up_as_parse_failures(cases):
-    results = run_cases(unparsable_judge, cases)
+    results = run_cases(unparsable_agent(), cases)
     metrics = score(results)
     assert metrics["parse_failures"] == 20
     # Everything is refused, so recall is trivially perfect — which is
@@ -165,7 +189,7 @@ def test_an_unusable_provider_shows_up_as_parse_failures(cases):
 
 
 def test_the_report_names_every_case(cases):
-    text = report(run_cases(approving_judge, cases))
+    text = report(run_cases(approving_agent(), cases))
     for case in cases["cases"]:
         assert case["id"] in text
     assert "precision" in text and "pinpoint accuracy" in text
@@ -179,9 +203,9 @@ def test_the_report_names_every_case(cases):
     reason=f"set {ENV_FLAG}=1 (with a configured LLM_PROVIDER) to score a real judge",
 )
 def test_real_llm_judge_evaluation(cases):
-    from m3_production_delay.review.judge import build_llm
+    from m3_production_delay.llm_agents.review_agent import ReviewAgent
 
-    results = run_cases(build_llm(), cases)
+    results = run_cases(ReviewAgent(), cases)
     print(report(results))
     metrics = score(results)
     # Deliberately loose: this exists to produce the numbers, not to gate a
