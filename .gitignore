@@ -15,7 +15,7 @@ frontend/dist/
 frontend/*.tsbuildinfo
 frontend/vite.config.ts.timestamp-*.mjs
 npm-debug.log*
-frontend
+# frontend
 CLAUDE.md
 
 
@@ -54,7 +54,7 @@ modules/m3_delay
 modules/m4_bom
 modules/m5_scheduling
 
-frontend
+# Frontend source is tracked; generated files and local secrets remain ignored above.
 CLAUDE.md
 
 # Local-only developer tooling: kept on disk, deliberately not committed.
