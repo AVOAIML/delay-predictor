@@ -12,12 +12,20 @@ vocabulary, later.
 Each element, and exactly how it reads the rollup shape:
 
   time_overrun_ratio (per operation)
-    = actual_duration_minutes / expected_duration_minutes
-    >1 means the operation has already taken longer than scheduled; <1 means
-    still within schedule. None when the operation hasn't started yet
-    (actual_duration_minutes is None - that field is only set once a work
-    order's first time log closes, per dal.py) or expected_duration_minutes
-    is 0.
+    = actual_duration_minutes / (work_done_percentage * expected_duration_minutes)
+    where work_done_percentage = current_done_quantity / job_quantity.
+    Weighs the logged time against how much of the job is ACTUALLY done, not
+    the full expected duration - an operation 60% done in 350 minutes against
+    a 480-minute budget has technically used LESS time than the full budget
+    so far, but at that per-unit rate it's already running behind
+    (350 / (0.6*480) ≈ 1.22), which plain actual/expected (350/480 ≈ 0.73)
+    would miss until the operation is already overdue. >1 means running
+    behind at the current pace; <1 means ahead. None when
+    actual_duration_minutes is missing/0 (that field is only set once a work
+    order's first time log closes, per dal.py), expected_duration_minutes is
+    0, or work_done_percentage is missing/0 (no progress yet to weigh the
+    logged time against - e.g. still in a setup/prep phase before the first
+    unit is finished).
 
   predecessor_time_overrun_ratio (per operation)
     = MAX(time_overrun_ratio of each critical-path predecessor)
@@ -84,16 +92,32 @@ def _to_days(delta: Any) -> float:
     return float(delta)
 
 
+def work_done_percentage(op: dict) -> float | None:
+    """current_done_quantity / job_quantity, as a fraction (not *100). None
+    when either is missing or 0 - e.g. still in a setup/prep phase before
+    the first unit is finished, where there is no real progress yet to
+    express as a percentage."""
+    current_done = op.get("current_done_quantity")
+    job_quantity = op.get("job_quantity")
+    if not current_done or not job_quantity:
+        return None
+    return current_done / job_quantity
+
+
 def time_overrun_ratio(op: dict) -> float | None:
     """None when actual_duration_minutes is missing OR 0 - a work order with
     zero actual time isn't a real "0% overrun" data point, it means no time
     has actually been logged yet (same as not having started), so it's
-    excluded rather than producing a misleading ratio of 0.0."""
+    excluded rather than producing a misleading ratio of 0.0. Also None when
+    work_done_percentage is None - see its own docstring / this module's."""
     actual = op.get("actual_duration_minutes")
     expected = op.get("expected_duration_minutes")
     if not actual or not expected:
         return None
-    return actual / expected
+    pct_done = work_done_percentage(op)
+    if pct_done is None:
+        return None
+    return actual / (pct_done * expected)
 
 
 def predicted_overrun_hours(op: dict) -> float | None:
@@ -131,15 +155,14 @@ def predicted_overrun_hours(op: dict) -> float | None:
         return None
 
     actual = op.get("actual_duration_minutes")
-    current_done = op.get("current_done_quantity")
-    job_quantity = op.get("job_quantity")
+    pct_done = work_done_percentage(op)
     # `actual` (not `actual is not None`): a 0 here means no time has really
     # been logged yet either, same reasoning as time_overrun_ratio - fall
     # through to the operator-history basis instead of projecting from a
     # meaningless "0 minutes for this much progress" rate.
-    # if actual and current_done and job_quantity:
-    #     predicted_total_duration = actual * (job_quantity / current_done)
-    #     return (predicted_total_duration - expected) / 60.0
+    if actual and pct_done is not None:
+        predicted_total_duration = actual / pct_done
+        return (predicted_total_duration - expected) / 60.0
 
     op_pace = operator_pace_ratio(op)
     if op_pace is None:
