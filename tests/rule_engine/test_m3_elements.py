@@ -21,6 +21,7 @@ from m3_production_delay.rule_engine.elements import (
     time_overrun_ratio,
     vendor_lead_time_ratio,
     weights_bp_to_risk_weights,
+    work_done_percentage,
     DEFAULT_RISK_WEIGHTS,
 )
 
@@ -87,12 +88,52 @@ def make_po(order_date, deadline, received, po_number="PO-1") -> dict:
     }
 
 
+# ─── work_done_percentage ────────────────────────────────────────────────────
+
+
+def test_work_done_percentage_normal():
+    op = make_op(current_done_quantity=60.0, job_quantity=100.0)
+    assert work_done_percentage(op) == pytest.approx(0.6)
+
+
+def test_work_done_percentage_none_when_current_done_is_zero():
+    op = make_op(current_done_quantity=0.0, job_quantity=100.0)
+    assert work_done_percentage(op) is None
+
+
+def test_work_done_percentage_none_when_job_quantity_is_zero():
+    op = make_op(current_done_quantity=60.0, job_quantity=0.0)
+    assert work_done_percentage(op) is None
+
+
+def test_work_done_percentage_none_when_either_is_missing():
+    assert work_done_percentage(make_op(current_done_quantity=None, job_quantity=100.0)) is None
+    assert work_done_percentage(make_op(current_done_quantity=60.0, job_quantity=None)) is None
+
+
 # ─── time_overrun_ratio ─────────────────────────────────────────────────────
 
 
 def test_time_overrun_ratio_normal():
+    # make_op defaults: current_done_quantity=60.0, job_quantity=100.0 ->
+    # work_done_percentage=0.6.
     op = make_op(actual_duration_minutes=350, expected_duration_minutes=480)
-    assert time_overrun_ratio(op) == pytest.approx(350 / 480)
+    assert time_overrun_ratio(op) == pytest.approx(350 / (0.6 * 480))
+
+
+def test_time_overrun_ratio_weighs_progress_not_just_raw_time_used():
+    # 60% done in 350 minutes against a 480-minute budget has used LESS than
+    # the full time budget so far, but at that per-unit rate it's already
+    # running behind - the progress-weighted ratio must be >1 even though
+    # actual (350) < expected (480), which the old plain actual/expected
+    # ratio (350/480 ≈ 0.73) would have reported as still ahead of schedule.
+    op = make_op(
+        actual_duration_minutes=350, expected_duration_minutes=480,
+        current_done_quantity=60.0, job_quantity=100.0,
+    )
+    ratio = time_overrun_ratio(op)
+    assert ratio > 1.0
+    assert ratio == pytest.approx(350 / (0.6 * 480))
 
 
 def test_time_overrun_ratio_none_when_not_started():
@@ -108,6 +149,34 @@ def test_time_overrun_ratio_none_when_expected_zero():
 def test_time_overrun_ratio_none_when_actual_is_zero():
     # 0 logged minutes is not a real "0% overrun" - treated like not-started.
     op = make_op(actual_duration_minutes=0, expected_duration_minutes=480)
+    assert time_overrun_ratio(op) is None
+
+
+def test_time_overrun_ratio_none_when_current_done_quantity_is_zero():
+    # No progress yet to weigh the logged time against (e.g. still in a
+    # setup/prep phase before the first unit is finished) - not treated as
+    # work_done_percentage=0 dividing by zero, and not falling back to the
+    # plain actual/expected ratio either.
+    op = make_op(
+        actual_duration_minutes=100, expected_duration_minutes=480,
+        current_done_quantity=0.0, job_quantity=100.0,
+    )
+    assert time_overrun_ratio(op) is None
+
+
+def test_time_overrun_ratio_none_when_job_quantity_is_zero():
+    op = make_op(
+        actual_duration_minutes=100, expected_duration_minutes=480,
+        current_done_quantity=60.0, job_quantity=0.0,
+    )
+    assert time_overrun_ratio(op) is None
+
+
+def test_time_overrun_ratio_none_when_current_done_quantity_missing():
+    op = make_op(
+        actual_duration_minutes=100, expected_duration_minutes=480,
+        current_done_quantity=None, job_quantity=100.0,
+    )
     assert time_overrun_ratio(op) is None
 
 
@@ -458,8 +527,9 @@ def test_calculate_delay_elements_end_to_end_shape_and_values():
     ops = {op["operation_id"]: op for op in enriched["operations"]}
     op_a, op_b = ops["op-a"], ops["op-b"]
 
-    # op-a: fully computable
-    assert op_a["time_overrun_ratio"] == pytest.approx(350 / 480)
+    # op-a: fully computable (current_done_quantity=60.0, job_quantity=100.0
+    # -> work_done_percentage=0.6)
+    assert op_a["time_overrun_ratio"] == pytest.approx(350 / (0.6 * 480))
     assert op_a["predecessor_time_overrun_ratio"] is None  # independent
     assert op_a["operator_pace_ratio"] == pytest.approx(500 / 400)
     assert op_a["material_shortfall_ratio"] == pytest.approx(100 / 40)
