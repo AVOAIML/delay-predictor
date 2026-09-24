@@ -23,10 +23,10 @@ here and nowhere else:
     tenant's weight vector does not sum to 1 (it never does — the Weight
     Agent's ``seasonality`` share has no rule-engine equivalent and is
     dropped).
-  * **is_scorable** — the user story's 25%-progress gate. The engine scores
-    every operation regardless of progress, so an operation that has not
-    started can still come back ``is_delayed=True`` on operator, material and
-    supplier signals alone. Section 3 will not explain such an operation.
+  * **is_scorable** — the user story's 25%-progress gate, applied to combined
+    Manufacturing Order progress rather than to each Work Order separately.
+    Once the duration-weighted MO reaches the milestone, its operations may
+    contribute to the review, including predictive dependent-operation risk.
 
 Two structural facts about the rollup shape drive the rest of the design.
 Components are attached per *manufacturing order*, not per operation, so
@@ -43,6 +43,7 @@ import math
 from typing import Any
 
 from maxxflow_core.errors import get_logger
+from m3_production_delay.rule_engine.elements import manufacturing_order_progress
 
 from m3_production_delay.review.schemas import (
     BASIS_NONE,
@@ -91,11 +92,12 @@ WEIGHTED_SIGNALS: tuple[str, ...] = (
     SIGNAL_SUPPLIER_RELIABILITY,
 )
 
-#: Minimum elapsed share of the planned duration before this agent will
-#: explain an operation (user story: "25% progress"). Measured on
-#: ``time_overrun_ratio`` = actual/expected, which is the only progress
-#: measure available for an operation with no finished units yet.
-SCORING_GATE_MIN_TIME_RATIO = 0.25
+#: Minimum duration-weighted completion across all Work Orders before this
+#: agent will explain the Manufacturing Order (user story: "25% progress").
+SCORING_GATE_MIN_MO_PROGRESS = 0.25
+# Compatibility alias for callers that imported the old name. The gate now
+# measures combined MO completion, not an operation's elapsed-time ratio.
+SCORING_GATE_MIN_TIME_RATIO = SCORING_GATE_MIN_MO_PROGRESS
 
 
 def fired(key: str, value: float | None) -> bool:
@@ -147,26 +149,16 @@ def overrun_basis(op: dict) -> str:
     return BASIS_NONE
 
 
-def is_scorable(op: dict) -> bool:
-    """The user story's scoring gate, which the rule engine does not apply.
+def is_scorable(op: dict, mo_progress: float | None = None) -> bool:
+    """Whether this operation may participate after the MO-level 25% gate.
 
-    Requires both that time has actually been logged and that at least 25% of
-    the planned duration has elapsed. An operation below that has too little
-    signal to attribute a cause to, however high its composite score climbs
-    on operator/material/supplier history alone.
+    ``op`` remains in the signature for compatibility and for the natural
+    call site, but eligibility is deliberately shared by every operation in
+    the same MO. The caller must supply that MO's duration-weighted progress.
     """
-    cascade = finite_or_none(op.get(SIGNAL_CRITICAL_PATH_CASCADE))
-    if cascade is not None and fired(SIGNAL_CRITICAL_PATH_CASCADE, cascade):
-        # A validated critical-path cascade is intentionally predictive: the
-        # dependent may not have started yet, which is precisely when the
-        # inherited warning is useful.
-        return True
-    if op.get("actual_duration_minutes") is None:
-        return False
-    ratio = finite_or_none(op.get("time_overrun_ratio"))
-    if ratio is None:
-        return False
-    return ratio >= SCORING_GATE_MIN_TIME_RATIO
+    del op
+    progress = finite_or_none(mo_progress)
+    return progress is not None and progress >= SCORING_GATE_MIN_MO_PROGRESS
 
 
 def operator_history_depth(op: dict) -> int:
@@ -319,7 +311,7 @@ def _signal(
 
 
 def _operation_evidence(
-    op: dict, weights: dict[str, float], issues: list[Issue]
+    op: dict, weights: dict[str, float], issues: list[Issue], mo_progress: float | None
 ) -> OperationEvidence:
     operation_id = str(op.get("operation_id") or "")
     if not operation_id:
@@ -496,7 +488,7 @@ def _operation_evidence(
         depends_on_operation_ids=tuple(
             str(pid) for pid in (op.get("depends_on_operation_ids") or [])
         ),
-        is_scorable=is_scorable(op),
+        is_scorable=is_scorable(op, mo_progress),
     )
 
 
@@ -686,8 +678,12 @@ def build_evidence(job: dict, weights: dict[str, float], threshold: float) -> Ev
         raise ValueError("threshold is required — Section 3 has no default delay threshold")
 
     issues: list[Issue] = []
+    raw_operations = job.get("operations") or []
+    mo_progress = finite_or_none(job.get("manufacturing_order_progress"))
+    if mo_progress is None:
+        mo_progress = manufacturing_order_progress(raw_operations)
     operations = tuple(
-        _operation_evidence(op, weights, issues) for op in (job.get("operations") or [])
+        _operation_evidence(op, weights, issues, mo_progress) for op in raw_operations
     )
     _assert_threshold_matches(job_id, operations, float(threshold))
     material_overrun = _material_overrun(operations)

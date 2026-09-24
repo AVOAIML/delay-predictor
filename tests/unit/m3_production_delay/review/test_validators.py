@@ -101,8 +101,8 @@ def test_dropping_a_fired_weighted_line_is_an_omission_error(clean):
     pack, draft = clean
     kept = tuple(line for line in draft.why_lines if line.signal_key != SIGNAL_OPERATOR_PACE)
     issues = check_no_omission(pack, draft.with_lines(kept))
-    assert [i.check for i in issues] == ["omitted_signal"]
-    assert issues[0].is_error
+    assert [i.check for i in issues] == ["omitted_signal", "omitted_signal"]
+    assert all(issue.is_error for issue in issues)
 
 
 def test_a_fired_signal_that_cannot_be_rendered_is_a_warning_not_an_error(weights, threshold):

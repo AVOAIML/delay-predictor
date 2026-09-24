@@ -15,6 +15,7 @@ from m3_production_delay.rule_engine.elements import (
     composite_risk_score,
     is_delayed,
     material_shortfall_ratio,
+    manufacturing_order_progress,
     operator_pace_ratio,
     predecessor_time_overrun_ratio,
     predicted_overrun_hours,
@@ -109,6 +110,27 @@ def test_work_done_percentage_none_when_job_quantity_is_zero():
 def test_work_done_percentage_none_when_either_is_missing():
     assert work_done_percentage(make_op(current_done_quantity=None, job_quantity=100.0)) is None
     assert work_done_percentage(make_op(current_done_quantity=60.0, job_quantity=None)) is None
+
+
+# ─── manufacturing_order_progress ───────────────────────────────────────────
+
+
+def test_manufacturing_order_progress_is_expected_duration_weighted():
+    operations = [
+        make_op(expected_duration_minutes=300, current_done_quantity=50, job_quantity=100),
+        make_op(expected_duration_minutes=100, current_done_quantity=0, job_quantity=100),
+    ]
+    assert manufacturing_order_progress(operations) == pytest.approx(0.375)
+
+
+def test_manufacturing_order_progress_clamps_completed_quantity():
+    operations = [make_op(expected_duration_minutes=60, current_done_quantity=120, job_quantity=100)]
+    assert manufacturing_order_progress(operations) == pytest.approx(1.0)
+
+
+def test_manufacturing_order_progress_is_none_without_planned_duration():
+    assert manufacturing_order_progress([]) is None
+    assert manufacturing_order_progress([make_op(expected_duration_minutes=0)]) is None
 
 
 # ─── time_overrun_ratio ─────────────────────────────────────────────────────
@@ -645,7 +667,9 @@ def test_calculate_delay_elements_respects_custom_weights_and_threshold():
 
 def test_calculate_delay_elements_handles_empty_job():
     enriched = calculate_delay_elements_for_jobs([{"job_id": "EMPTY", "operations": []}])[0]
-    assert enriched == {"job_id": "EMPTY", "operations": []}
+    assert enriched == {
+        "job_id": "EMPTY", "manufacturing_order_progress": None, "operations": [],
+    }
 
 
 # ─── multiple jobs: calculate_delay_elements_for_jobs ───────────────────────

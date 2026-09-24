@@ -8,8 +8,10 @@ scenario: one operation logged well past its planned duration, and three
 components short in the warehouse — via `_m3_demo_common.insert_job()`,
 the same insert path `m3_demo_api.py`'s POST endpoint uses for
 user-created MOs. The second job reproduces the user-story cascading-delay
-case: an independent predecessor is 25% complete and running at 1.30x its
-progress-adjusted plan, while its dependent operation has not started.
+case: an independent predecessor is 50% complete and running at 1.30x its
+progress-adjusted plan, while its dependent operation has not started. With
+the dependent's planned duration included, combined duration-weighted MO
+progress is 28.57%, clearing the 25% analysis gate.
 
 Requires a reachable DATA_DB_URL with tenant_demo already provisioned
 (`maxxflow db-provision --tenant demo`, or here: a native Homebrew Postgres
@@ -72,6 +74,7 @@ def _verify_cascade_seed() -> None:
     ]
 
     print("cascade verification:")
+    print(f"  manufacturing_order_progress={job['manufacturing_order_progress']:.2%}")
     print(
         "  predecessor "
         f"work_done={predecessor['current_done_quantity'] / predecessor['job_quantity']:.0%} "

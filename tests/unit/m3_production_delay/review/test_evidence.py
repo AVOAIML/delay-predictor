@@ -11,7 +11,7 @@ import pytest
 from conftest import make_component, make_history_entry, make_op, make_operator, make_po, make_vendor
 from m3_production_delay.review.evidence import (
     FIRE_BASELINES,
-    SCORING_GATE_MIN_TIME_RATIO,
+    SCORING_GATE_MIN_MO_PROGRESS,
     build_evidence,
     fired,
     is_scorable,
@@ -94,15 +94,16 @@ def test_overrun_basis_is_none_when_neither_is_available():
 # ─── the scoring gate Section 1 does not apply ───────────────────────────────
 
 
-def test_is_scorable_requires_logged_time_and_25_percent_progress():
-    assert is_scorable(make_op(actual_duration_minutes=200, time_overrun_ratio=0.5))
-    assert not is_scorable(make_op(actual_duration_minutes=None, time_overrun_ratio=None))
-    assert not is_scorable(make_op(actual_duration_minutes=10, time_overrun_ratio=0.2))
+def test_is_scorable_uses_combined_mo_progress_not_operation_time():
+    op = make_op(actual_duration_minutes=None, time_overrun_ratio=None)
+    assert is_scorable(op, 0.30)
+    assert not is_scorable(op, 0.20)
+    assert not is_scorable(op, None)
 
 
 def test_is_scorable_at_exactly_the_gate():
-    op = make_op(actual_duration_minutes=120, time_overrun_ratio=SCORING_GATE_MIN_TIME_RATIO)
-    assert is_scorable(op)
+    op = make_op(actual_duration_minutes=None, time_overrun_ratio=None)
+    assert is_scorable(op, SCORING_GATE_MIN_MO_PROGRESS)
 
 
 # ─── labels: never invented ──────────────────────────────────────────────────
@@ -287,7 +288,9 @@ def test_job_scoped_material_and_supplier_evidence_is_built(section1_job, weight
 def test_summary_is_the_worst_scorable_operation_not_a_sum(section1_job, weights, threshold):
     pack = build_evidence(section1_job, weights, threshold)
     scorable = pack.scorable_operations
-    assert [op.operation_id for op in scorable] == ["wo-cutting-0001", "wo-welding-0002"]
+    assert [op.operation_id for op in scorable] == [
+        "wo-cutting-0001", "wo-welding-0002", "wo-assembly-0003",
+    ]
     assert pack.summary_risk_score == pytest.approx(
         max(op.composite_risk_score for op in scorable)
     )
@@ -298,16 +301,14 @@ def test_summary_is_the_worst_scorable_operation_not_a_sum(section1_job, weights
     assert pack.summary_basis == "worst_operation"
 
 
-def test_summary_ignores_the_unscorable_operation_even_when_it_is_flagged_delayed(
+def test_mo_gate_makes_not_started_operation_eligible_after_combined_progress(
     section1_job, weights, threshold
 ):
     pack = build_evidence(section1_job, weights, threshold)
     assembly = pack.operation("wo-assembly-0003")
-    assert assembly.is_scorable is False
+    assert assembly.is_scorable is True
     assert assembly.is_delayed is True
-    # 1.61 is the highest score in the job, and it is deliberately not the
-    # summary: nothing has been logged against that operation yet.
-    assert pack.summary_risk_score < assembly.composite_risk_score
+    assert pack.summary_risk_score == assembly.composite_risk_score
 
 
 def test_summary_is_delayed_always_agrees_with_score_against_threshold(
@@ -320,6 +321,7 @@ def test_summary_is_delayed_always_agrees_with_score_against_threshold(
 def test_summary_is_none_when_no_operation_is_scorable(weights, threshold):
     op = make_op(
         actual_duration_minutes=None, time_overrun_ratio=None, operator_pace_ratio=1.25,
+        current_done_quantity=0,
         material_shortfall_ratio=0.0, predecessor_time_overrun_ratio=None,
         composite_risk_score=1.25, is_delayed=True, predicted_overrun_hours=1.0,
     )

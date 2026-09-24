@@ -15,6 +15,7 @@ from m3_production_delay.rule_engine.elements import (
     calculate_delay_elements_for_jobs,
     composite_risk_score,
     is_delayed,
+    manufacturing_order_progress,
     DEFAULT_RISK_WEIGHTS,
     DEFAULT_DELAY_THRESHOLD,
 )
@@ -22,5 +23,6 @@ from m3_production_delay.rule_engine.elements import (
 __all__ = [
     "read_delay_tables", "build_job_rollups",
     "calculate_delay_elements_for_jobs",
-    "composite_risk_score", "is_delayed", "DEFAULT_RISK_WEIGHTS", "DEFAULT_DELAY_THRESHOLD",
+    "composite_risk_score", "is_delayed", "manufacturing_order_progress",
+    "DEFAULT_RISK_WEIGHTS", "DEFAULT_DELAY_THRESHOLD",
 ]

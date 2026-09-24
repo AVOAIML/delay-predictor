@@ -105,14 +105,14 @@ def test_review_jobs_returns_one_validated_insight_per_job(scored_job):
     assert isinstance(insights[0], ValidatedInsight)
     assert insights[0].job_id == "WH/MO/00142"
     assert insights[0].status == STATUS_APPROVED_WITH_WARNINGS
-    assert len(insights[0].why_lines) == 4
+    assert len(insights[0].why_lines) == 5
 
 
 def test_the_threshold_is_carried_into_the_insight(scored_job):
     orchestrator = _orchestrator(ApprovingProvider())
     insights = orchestrator.review_jobs([scored_job], weights=WEIGHTS, threshold=1.3)
 
-    # 1.45 is above 1.3 as it was above 1.0, so the engine's badge still
+    # 1.61 is above 1.3 as it was above 1.0, so the engine's badge still
     # holds — and the cutoff it was judged against travels with the payload.
     assert insights[0].delay_threshold == 1.3
     assert insights[0].is_delayed is True

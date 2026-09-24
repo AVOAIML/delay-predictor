@@ -94,7 +94,7 @@ what they already publish:
 | `supplier_reliability` | Mean of `components[].vendor.vendor_lead_time_ratio` over components that have one. The engine computes this privately and feeds it into the score without attaching it. |
 | `overrun_basis` | `"quantity"` when there is progress to extrapolate from, else `"operator_pace"`, else `"none"` — so a summary never implies a quantity projection for a number that came from an operator's history. |
 | `contribution` | `weight × value / (score × Σweight_active)`. The `Σweight_active` factor undoes the renormalisation `composite_risk_score` performs over non-None signals, so shares over one operation sum to **1**. |
-| `is_scorable` | The user story's 25% gate: `actual_duration_minutes is not None and time_overrun_ratio >= 0.25`. The engine scores every operation regardless of progress. |
+| `is_scorable` | The user story's 25% gate, shared by all operations in an MO: `Σ(expected duration × completed quantity ratio) / Σ(expected duration) >= 0.25`. Ratios are clamped to 0–1; missing progress contributes zero. |
 | Job summary | The engine has no roll-up. `risk_score` / `overrun_hours` are the **max over scorable operations** (not a sum — parallel work would double-count), `is_delayed` is `any`. Recorded as `summary_basis: "worst_operation"`. |
 | Job-scoped material & supplier | `rollup.py` attaches the MO's whole component list to every operation, so those two signals repeat identically. They are de-duplicated by `component_id` and stated **once per job**; time and operator stay per operation. |
 

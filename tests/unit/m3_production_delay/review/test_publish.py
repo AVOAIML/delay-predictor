@@ -50,7 +50,7 @@ def test_the_payload_carries_the_summary_the_panel_renders(insight):
 
     assert values["job_id"] == "WH/MO/00142"
     assert values["status"] == "approved_with_warnings"
-    assert values["risk_score"] == pytest.approx(1.4523809523809523)
+    assert values["risk_score"] == pytest.approx(1.6142857142857145)
     assert values["overrun_hours"] == pytest.approx(8.666666666666666)
     assert values["is_delayed"] is True
     assert values["summary_basis"] == "worst_operation"
@@ -61,7 +61,7 @@ def test_the_payload_carries_the_summary_the_panel_renders(insight):
 
 def test_every_line_in_the_payload_carries_its_traceable_numbers(insight):
     values = advisory_payload(insight)[ADVISORY_KEY]
-    assert len(values["why_lines"]) == 4
+    assert len(values["why_lines"]) == 5
     for line in values["why_lines"]:
         assert line["headline"] and line["detail"]
         assert line["quoted"], "a line must record the evidence values it quoted"
@@ -120,6 +120,7 @@ def test_only_the_three_unvalidated_statuses_are_audited(
             "operations": [
                 make_op(
                     actual_duration_minutes=None, time_overrun_ratio=None,
+                    current_done_quantity=0,
                     operator_pace_ratio=None, material_shortfall_ratio=0.0,
                     predecessor_time_overrun_ratio=None, composite_risk_score=None,
                     is_delayed=None, predicted_overrun_hours=None,
