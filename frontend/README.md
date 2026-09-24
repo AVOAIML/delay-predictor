@@ -16,12 +16,13 @@ npm install
 npm run dev          # http://localhost:5173
 ```
 
-Use the **Demo MO** dropdown in the top bar to switch between three
+Use the **Demo MO** dropdown in the top bar to switch between four
 fixtures that each exercise a different M3 signal:
 
 | Order | Signal fired | Risk |
 |---|---|---|
 | `WH/MO/00142` Wooden Table | `time_overrun_ratio` | High — this is the screenshot scenario, and its fixture is a byte-for-byte copy of a real pipeline run (see below) |
+| `WH/MO/CASCADE-001` Critical-path Assembly | `critical_path_cascade_ratio` | Medium — a not-started dependent inherits a 1.30× critical-path overrun |
 | `WH/MO/00151` Steel Cabinet | `operator_pace_ratio` + `material_shortfall_ratio` | Medium |
 | `WH/MO/00163` Office Chair | none fired | Low, no why-lines |
 
@@ -39,7 +40,8 @@ scoring/review pipeline, then read back what it actually computed.
 uv run python scripts/m3_demo_seed.py
 
 # 2. run the REAL pipeline: rule engine -> weight agent -> review agent -> publish
-uv run python -m m3_production_delay.review --tenant demo --threshold 1.0 --job "WH/MO/00142"
+uv run python -m m3_production_delay.review --tenant demo --threshold 1.0 \
+  --job "WH/MO/00142" --job "WH/MO/CASCADE-001"
 
 # 3. serve that row over HTTP, unauthenticated, for local use only
 uv run uvicorn scripts.m3_demo_api:app --port 8010
@@ -50,31 +52,37 @@ echo "VITE_TENANT=demo" >> frontend/.env.local
 cd frontend && npm run dev
 ```
 
-With `VITE_API_BASE` set, `src/api.ts` fetches
-`GET /api/{tenant}/delay-insights?job=<reference>` for whichever MO is
-selected, and only falls back to the bundled fixture if that job hasn't been
-seeded/scored (try the `WH/MO/00151`/`WH/MO/00163` fixtures with the bridge
-running — they 404 against the live DB and fall back cleanly).
+With `VITE_API_BASE` set, the frontend loads its complete active-order list
+from `GET /api/{tenant}/demo-manufacturing-orders`. Product, BOM, quantity,
+scheduled date, status, components, Work Orders, activity timestamps, and the
+cached M3 insight all come from tenant-scoped database rows. Bundled fixtures
+are used only when no API base is configured; live mode does not mix fixture
+orders with database orders.
 
 ### Creating a new MO from the UI
 
 With the bridge running, a **"+ New MO"** button appears next to the Demo MO
 dropdown (it's hidden in fixture-only mode — there's nothing for it to call).
-It opens a form — product, quantity, operation name, expected vs. actual
-hours, delay threshold, and a list of components with required/available
-quantities — that on submit calls
+It opens a database-driven form. Selecting a Product loads that Product's
+BOMs; selecting a BOM loads its component defaults and operation/dependency
+graph. Changing the MO quantity scales the BOM component requirements. You
+can then adjust component requirements and stock,
+add custom components, enter actual progress on the loaded Work Orders, add
+new Work Orders, and choose predecessor relationships before submitting. The
+form then calls
 `POST /api/{tenant}/demo-manufacturing-orders`
 (`scripts/m3_demo_api.py`), which:
 
-1. inserts one new job into `tenant_demo`'s real MRP tables
-   (`_m3_demo_common.insert_job`, the same insert path
-   `scripts/m3_demo_seed.py` uses for the fixed Wooden Table scenario),
+1. inserts the configured MO, component snapshots, Work Orders, time logs,
+   and custom operation dependencies into `tenant_demo`'s real MRP tables,
 2. runs `m3_production_delay.review.pipeline.run()` against it for real, and
 3. returns the freshly computed `ValidatedInsight`.
 
-The new MO is appended to the Demo MO dropdown and selected immediately —
-whatever the delay panel shows came out of that specific run, for whatever
-numbers you typed in. There's no MO CRUD endpoint on the real Configurator
+After scoring, the POST route reloads the newly created MO using the same
+database reader as the initial page load and returns that persisted read
+model. React does not reconstruct the product, BOM, components, Work Orders,
+or activity locally. The returned MO is selected immediately. There's no MO
+CRUD endpoint on the real Configurator
 API (M3 scores existing MOs, it doesn't create them — MO creation belongs to
 the main MaXXFlow product's own UI), so this only works against the local
 bridge, never against a live authenticated deployment.

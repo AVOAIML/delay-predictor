@@ -50,14 +50,15 @@ from m3_production_delay.llm_agents.review_agent.models import (  # noqa: F401
 # --- vocabularies -----------------------------------------------------------
 
 #: Rule-engine signal keys this agent understands. The first four are the
-#: weighted inputs to ``composite_risk_score`` (they are exactly
-#: ``elements.DEFAULT_RISK_WEIGHTS``' keys); the fifth is computed by the rule
-#: engine but never weighted, so it can only ever appear as context.
+#: tenant-weighted inputs to the base score. The critical-path cascade is a
+#: deterministic score overlay. The raw predecessor ratio is unweighted
+#: context and cannot appear as a cause by itself.
 SIGNAL_TIME_OVERRUN = "time_overrun_ratio"
 SIGNAL_OPERATOR_PACE = "operator_pace_ratio"
 SIGNAL_MATERIAL_SHORTFALL = "material_shortfall_ratio"
 SIGNAL_SUPPLIER_RELIABILITY = "supplier_reliability"
 SIGNAL_PREDECESSOR_OVERRUN = "predecessor_time_overrun_ratio"
+SIGNAL_CRITICAL_PATH_CASCADE = "critical_path_cascade_ratio"
 
 #: Canonical order. Normative for every deterministic tie-break (line
 #: ordering, omission checks) so two runs over the same evidence agree.
@@ -66,6 +67,7 @@ SIGNAL_ORDER: tuple[str, ...] = (
     SIGNAL_OPERATOR_PACE,
     SIGNAL_MATERIAL_SHORTFALL,
     SIGNAL_SUPPLIER_RELIABILITY,
+    SIGNAL_CRITICAL_PATH_CASCADE,
     SIGNAL_PREDECESSOR_OVERRUN,
 )
 SIGNAL_SET: frozenset[str] = frozenset(SIGNAL_ORDER)
@@ -244,11 +246,12 @@ class SignalEvidence:
     carried into ``composite_risk_score``, whether it cleared its fire
     baseline, its share of the score, and the raw numbers a line may quote.
 
-    ``contribution`` is a share of the *composite*, so it accounts for the
-    renormalisation ``composite_risk_score`` performs over whichever weights
-    had a non-None value — see ``evidence.py``. It is ``None`` whenever the
-    share is not computable (no value, no score, or a zero score), never 0.0,
-    because "contributed nothing" and "cannot be computed" order differently.
+    ``contribution`` is a share of the final score. For tenant-weighted
+    signals it accounts for the base composite's renormalisation; for the
+    critical-path cascade it is the share added by the deterministic overlay.
+    It is ``None`` whenever the share is not computable, never a fabricated
+    zero, because "contributed nothing" and "cannot be computed" order
+    differently.
     """
 
     key: str
@@ -279,6 +282,21 @@ class SignalEvidence:
     @property
     def is_weighted(self) -> bool:
         return self.weight > 0
+
+    @property
+    def affects_score(self) -> bool:
+        """Whether this signal can truthfully be presented as a score cause.
+
+        Most causes participate through a tenant weight. The critical-path
+        cascade instead changes the score through a deterministic overlay;
+        its positive contribution records that change without pretending it
+        received a Weight Agent weight.
+        """
+        return self.is_weighted or (
+            self.key == SIGNAL_CRITICAL_PATH_CASCADE
+            and self.contribution is not None
+            and self.contribution > 0
+        )
 
     def to_dict(self) -> dict:
         return {

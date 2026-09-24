@@ -226,6 +226,11 @@ def _build_operations_for_mo(
             _code_for(id_to_code, op_row.iloc[0]["operation_type_id"])
             if not op_row.empty else None
         )
+        operation_name = (
+            op_row.iloc[0]["operation_name"]
+            if not op_row.empty and pd.notna(op_row.iloc[0]["operation_name"])
+            else None
+        )
         status_code = _code_for(id_to_code, wo["status_id"])
 
         assigned = wo["assigned_operators"] or []
@@ -258,6 +263,7 @@ def _build_operations_for_mo(
 
         operations_out.append({
             "operation_id": wo["id"],
+            "operation_name": operation_name,
             "operation_type": op_type_code,
             "status": status_code,
             "depends_on_operation_ids": _predecessor_work_order_ids(

@@ -50,6 +50,7 @@ from m3_production_delay.review.schemas import (
     BASIS_QUANTITY,
     SIGNAL_MATERIAL_SHORTFALL,
     SIGNAL_OPERATOR_PACE,
+    SIGNAL_CRITICAL_PATH_CASCADE,
     SIGNAL_PREDECESSOR_OVERRUN,
     SIGNAL_SUPPLIER_RELIABILITY,
     SIGNAL_TIME_OVERRUN,
@@ -77,6 +78,7 @@ FIRE_BASELINES: dict[str, float] = {
     SIGNAL_MATERIAL_SHORTFALL: 0.0,
     SIGNAL_SUPPLIER_RELIABILITY: 1.0,
     SIGNAL_PREDECESSOR_OVERRUN: 1.2,
+    SIGNAL_CRITICAL_PATH_CASCADE: 1.2,
 }
 
 #: The signals ``composite_risk_score`` actually weights, in the order the
@@ -153,6 +155,12 @@ def is_scorable(op: dict) -> bool:
     signal to attribute a cause to, however high its composite score climbs
     on operator/material/supplier history alone.
     """
+    cascade = finite_or_none(op.get(SIGNAL_CRITICAL_PATH_CASCADE))
+    if cascade is not None and fired(SIGNAL_CRITICAL_PATH_CASCADE, cascade):
+        # A validated critical-path cascade is intentionally predictive: the
+        # dependent may not have started yet, which is precisely when the
+        # inherited warning is useful.
+        return True
     if op.get("actual_duration_minutes") is None:
         return False
     ratio = finite_or_none(op.get("time_overrun_ratio"))
@@ -339,6 +347,11 @@ def _operation_evidence(
         SIGNAL_PREDECESSOR_OVERRUN, op.get("predecessor_time_overrun_ratio"), ref=operation_id,
         issues=issues, label=f"{label} predecessor_time_overrun_ratio",
     )
+    cascade = _coerce(
+        SIGNAL_CRITICAL_PATH_CASCADE, op.get("critical_path_cascade_ratio"),
+        ref=operation_id, issues=issues,
+        label=f"{label} critical_path_cascade_ratio",
+    )
     components = op.get("components") or []
     supplier = _coerce(
         SIGNAL_SUPPLIER_RELIABILITY, supplier_reliability(components), ref=operation_id,
@@ -347,6 +360,11 @@ def _operation_evidence(
     score = _coerce(
         "composite_risk_score", op.get("composite_risk_score"), ref=operation_id, issues=issues,
         label=f"{label} composite_risk_score",
+    )
+    base_score = _coerce(
+        "base_composite_risk_score", op.get("base_composite_risk_score"),
+        ref=operation_id, issues=issues,
+        label=f"{label} base_composite_risk_score",
     )
 
     expected = finite_or_none(op.get("expected_duration_minutes"))
@@ -404,6 +422,16 @@ def _operation_evidence(
             "ratio": predecessor,
             "predecessor_operation_ids": list(op.get("depends_on_operation_ids") or []),
         },
+        SIGNAL_CRITICAL_PATH_CASCADE: {
+            "ratio": cascade,
+            "source_operation_ids": list(op.get("cascade_source_operation_ids") or []),
+            "critical_predecessor_operation_ids": list(
+                op.get("critical_predecessor_operation_ids") or []
+            ),
+            "total_float_minutes": finite_or_none(
+                op.get("critical_path_total_float_minutes")
+            ),
+        },
     }
 
     signals = tuple(
@@ -415,6 +443,22 @@ def _operation_evidence(
             (SIGNAL_SUPPLIER_RELIABILITY, supplier),
         )
     ) + (
+        # This is a deterministic score overlay rather than a Weight Agent
+        # input, so its weight stays zero. Its contribution is the exact
+        # share of the final score added by the cascade rule, which marks it
+        # as a score cause without inventing a tenant weight.
+        SignalEvidence(
+            key=SIGNAL_CRITICAL_PATH_CASCADE,
+            value=cascade,
+            weight=0.0,
+            fired=fired(SIGNAL_CRITICAL_PATH_CASCADE, cascade),
+            contribution=(
+                None
+                if cascade is None or score is None or score == 0
+                else max(0.0, score - (base_score or 0.0)) / score
+            ),
+            detail=details[SIGNAL_CRITICAL_PATH_CASCADE],
+        ),
         # Computed by the engine but never an input to composite_risk_score.
         # Its weight is pinned to 0 here rather than read from the tenant
         # vector, so a stray key in a weight dict can never promote a

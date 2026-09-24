@@ -1,19 +1,19 @@
 import type { ManufacturingOrder } from "../types";
 
-// Three fixtures standing in for `GET /api/{tenant}/delay-insights`. The
+// Fixtures standing in for `GET /api/{tenant}/delay-insights`. The
 // `insight` block on each is shaped exactly like
 // `ValidatedInsight.to_dict()` (see src/types.ts) and its headline/detail
 // strings are copied verbatim from
 // modules/m3_production_delay/review/composer.py's HEADLINES table and
 // template functions — this is what the Review Agent's deterministic
-// composer actually renders for a fired, weighted signal, not invented copy.
+// composer actually renders for a fired score cause, not invented copy.
 //
-// The three orders exercise three different fired signals so switching
+// The orders exercise different fired signals so switching
 // between them demonstrates M3's actual range of behaviour: a pure
 // time-overrun cause (high risk), a blended operator-pace + material cause
 // (medium risk), and a healthy order with nothing fired (low risk, no
 // why_lines — schemas.py allows that: material_overrun is independent of
-// is_delayed, but why_lines can be empty when no weighted signal fired).
+// is_delayed, but why_lines can be empty when no score cause fired).
 
 export const SCENARIOS: ManufacturingOrder[] = [
   {
@@ -111,6 +111,64 @@ export const SCENARIOS: ManufacturingOrder[] = [
       ],
       model_version: "m3-review-v1",
       generated_at: "2026-09-21T21:00:52.085860+10:00",
+    },
+  },
+  {
+    reference: "WH/MO/CASCADE-001",
+    product: "Critical-path Assembly",
+    quantity: 100.0,
+    bom: "Critical-path Assembly BoM",
+    scheduledDate: "21/09/2026",
+    stage: "confirmed",
+    components: [
+      {
+        product: "Cut Panel Blanks",
+        availability: "Available",
+        toConsume: 100,
+        availableQuantity: 120,
+      },
+      {
+        product: "Assembly Fasteners",
+        availability: "Available",
+        toConsume: 400,
+        availableQuantity: 500,
+      },
+    ],
+    activity: [
+      {
+        actor: "M3 Demo",
+        initials: "M3",
+        timestamp: "23 Sep 2026, 10:55 PM",
+        title: "Critical-path cascade scenario scored",
+      },
+    ],
+    // Mirrors scripts/m3_demo_seed.py: Cut Components is 25% complete after
+    // 78 minutes against a 240-minute plan, giving a progress-normalized
+    // ratio of 1.30. Final Assembly has not started but depends on it along
+    // the zero-float critical path, so the cascade raises its score to 1.30.
+    insight: {
+      job_id: "WH/MO/CASCADE-001",
+      status: "approved",
+      overrun_hours: 1.2,
+      risk_score: 1.3,
+      is_delayed: true,
+      summary_basis: "worst_operation",
+      delay_threshold: 1.0,
+      why_lines: [
+        {
+          index: 0,
+          signal_key: "critical_path_cascade_ratio",
+          scope: "operation",
+          headline: "A critical-path predecessor is overrunning",
+          detail: "Final Assembly · inherited critical-path overrun 1.30× planned",
+          delta: null,
+          operation_id: "demo-cascade-dependent",
+          contribution: 1.0,
+        },
+      ],
+      material_overrun: [],
+      model_version: "m3-review-v1",
+      generated_at: "2026-09-23T22:55:30+05:30",
     },
   },
   {

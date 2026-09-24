@@ -1,0 +1,1826 @@
+// Prisma Schema for Multi-Tenant Architecture
+// Schema-Per-Tenant: Each tenant has its own schema
+// Shared schema (public) contains tenant metadata
+//
+// Note: Prisma doesn't natively support dynamic schemas well.
+// Models in this schema are used as a template for all tenant schemas.
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-arm64-openssl-3.0.x", "debian-openssl-3.0.x"]
+}
+
+generator erd {
+  provider     = "prisma-erd-generator"
+  output       = "../../../docs/database/erd.svg"
+  theme        = "default"
+  mmdcPath     = "../../node_modules/.bin"
+  disableEmoji = "true"
+  disabled     = env("DISABLE_ERD")
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// SHARED SCHEMA (public)
+// ============================================
+// Contains tenant metadata, users, and system tableKs
+
+model Tenant {
+  id                   String    @id @default(uuid()) @db.Uuid
+  slug                 String    @unique @db.VarChar(100)
+  name                 String    @db.VarChar(255)
+  schemaName           String    @unique @map("schema_name") @db.VarChar(63)
+  abn                  String?   @db.VarChar(11)
+  statusId             String    @map("status_id") @db.Uuid
+  tenantSubscriptionId String?   @unique @map("tenant_subscription_id") @db.Uuid
+  currentUserCount     Int       @default(0) @map("current_user_count")
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  deletedAt            DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  status              MasterData                @relation("TenantStatus", fields: [statusId], references: [id])
+  userTenants         UserTenant[]
+  subscriptions       TenantSubscription[]
+  currentSubscription TenantSubscription?       @relation("CurrentSubscription", fields: [tenantSubscriptionId], references: [id], onDelete: SetNull)
+  apiKeys             ApiKey[]
+  supersetDashboards  TenantSupersetDashboard[]
+  supersetConnection  TenantSupersetConnection?
+  supersetDatasets    TenantSupersetDataset[]
+  supersetCharts      TenantSupersetChart[]
+
+  @@index([slug])
+  @@index([statusId])
+  @@index([tenantSubscriptionId])
+  @@map("tenants")
+}
+
+model SupersetDashboardTemplate {
+  id                  String                    @id @default(uuid()) @db.Uuid
+  key                 String                    @unique @db.VarChar(100)
+  name                String                    @db.VarChar(255)
+  category            String?                   @db.VarChar(100)
+  description         String?                   @db.VarChar(500)
+  sourceDashboardId   Int?                      @map("source_dashboard_id")
+  sourceDashboardUuid String?                   @map("source_dashboard_uuid") @db.Uuid
+  isActive            Boolean                   @default(true) @map("is_active")
+  createdAt           DateTime                  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt           DateTime                  @updatedAt @map("updated_at") @db.Timestamp(6)
+  tenantDashboards    TenantSupersetDashboard[]
+
+  @@map("superset_dashboard_templates")
+}
+
+model TenantSupersetDashboard {
+  id                     String    @id @default(uuid()) @db.Uuid
+  tenantId               String    @map("tenant_id") @db.Uuid
+  templateId             String    @map("template_id") @db.Uuid
+  supersetDashboardId    Int?      @map("superset_dashboard_id")
+  supersetDashboardUuid  String?   @map("superset_dashboard_uuid") @db.Uuid
+  nameOverride           String?   @map("name_override") @db.VarChar(255)
+  isDefault              Boolean   @default(false) @map("is_default")
+  provisioningStatus     String    @default("pending") @map("provisioning_status") @db.VarChar(50)
+  dashboardCustomization Json?     @map("dashboard_customization") @db.JsonB
+  customizedAt           DateTime? @map("customized_at") @db.Timestamp(6)
+  customizedByUserId     String?   @map("customized_by_user_id") @db.Uuid
+  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  tenant   Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  template SupersetDashboardTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  charts   TenantSupersetChart[]
+
+  @@unique([tenantId, templateId])
+  @@index([tenantId])
+  @@index([templateId])
+  @@index([supersetDashboardId])
+  @@index([supersetDashboardUuid])
+  @@map("tenant_superset_dashboards")
+}
+
+model TenantSupersetConnection {
+  id                   String    @id @default(uuid()) @db.Uuid
+  tenantId             String    @unique @map("tenant_id") @db.Uuid
+  supersetDatabaseId   Int?      @map("superset_database_id")
+  supersetDatabaseName String?   @map("superset_database_name") @db.VarChar(255)
+  dbRoleName           String?   @map("db_role_name") @db.VarChar(63)
+  provisioningStatus   String    @default("pending") @map("provisioning_status") @db.VarChar(50)
+  lastSyncedAt         DateTime? @map("last_synced_at") @db.Timestamp(6)
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([supersetDatabaseId])
+  @@map("tenant_superset_connections")
+}
+
+model TenantSupersetDataset {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @map("tenant_id") @db.Uuid
+  supersetDatasetId Int       @unique @map("superset_dataset_id")
+  supersetDatabaseId Int?     @map("superset_database_id")
+  schemaName        String    @map("schema_name") @db.VarChar(63)
+  tableName         String    @map("table_name") @db.VarChar(255)
+  sourceType        String    @map("source_type") @db.VarChar(20)
+  displayName       String    @map("display_name") @db.VarChar(255)
+  isChartable       Boolean   @default(true) @map("is_chartable")
+  columnMetadata    Json?     @map("column_metadata") @db.JsonB
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  charts TenantSupersetChart[]
+
+  @@unique([tenantId, schemaName, tableName, sourceType])
+  @@index([tenantId])
+  @@index([schemaName, tableName])
+  @@index([supersetDatabaseId])
+  @@map("tenant_superset_datasets")
+}
+
+model TenantSupersetChart {
+  id                       String    @id @default(uuid()) @db.Uuid
+  tenantId                 String    @map("tenant_id") @db.Uuid
+  tenantSupersetDashboardId String   @map("tenant_superset_dashboard_id") @db.Uuid
+  tenantSupersetDatasetId  String    @map("tenant_superset_dataset_id") @db.Uuid
+  supersetChartId          Int?      @map("superset_chart_id")
+  sliceName                String    @map("slice_name") @db.VarChar(255)
+  vizType                  String    @map("viz_type") @db.VarChar(100)
+  chartConfig              Json      @map("chart_config") @db.JsonB
+  layoutConfig             Json      @map("layout_config") @db.JsonB
+  isSystem                 Boolean   @default(false) @map("is_system")
+  isVisible                Boolean   @default(true) @map("is_visible")
+  createdByUserId          String?   @map("created_by_user_id") @db.Uuid
+  createdAt                DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt                DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  tenant              Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  dashboard           TenantSupersetDashboard @relation(fields: [tenantSupersetDashboardId], references: [id], onDelete: Cascade)
+  dataset             TenantSupersetDataset   @relation(fields: [tenantSupersetDatasetId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantSupersetDashboardId])
+  @@index([tenantSupersetDatasetId])
+  @@index([supersetChartId])
+  @@map("tenant_superset_charts")
+}
+
+model PricingPlan {
+  id                   String   @id @default(uuid()) @db.Uuid
+  name                 String   @db.VarChar(255)
+  description          String?  @db.VarChar(500)
+  monthlyAmount        Int?     @map("monthly_amount_cents")
+  yearlyAmount         Int?     @map("yearly_amount_cents")
+  userCount            Int?     @map("user_count")
+  features             Json?    @map("features")
+  displayFeatures      Json?    @map("display_features")
+  isTrial              Boolean  @default(false) @map("is_trial")
+  isActive             Boolean  @default(true) @map("is_active")
+  stripePriceIdMonthly String?  @map("stripe_price_id_monthly") @db.VarChar(255)
+  stripePriceIdYearly  String?  @map("stripe_price_id_yearly") @db.VarChar(255)
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  subscriptions          TenantSubscription[]
+  scheduledSubscriptions TenantSubscription[] @relation("ScheduledPlan")
+
+  @@map("pricing_plans")
+}
+
+model TenantSubscription {
+  id                    String    @id @default(uuid()) @db.Uuid
+  tenantId              String    @map("tenant_id") @db.Uuid
+  pricingPlanId         String    @map("pricing_plan_id") @db.Uuid
+  statusId              String    @map("status_id") @db.Uuid
+  startedAt             DateTime  @map("started_at") @db.Timestamp(6)
+  expiresAt             DateTime? @map("expires_at") @db.Timestamp(6)
+  reminderSentAt        DateTime? @map("reminder_sent_at") @db.Timestamp(6)
+  // Stripe recurring subscription fields
+  stripeCustomerId      String?   @map("stripe_customer_id") @db.VarChar(255)
+  stripeSubscriptionId  String?   @map("stripe_subscription_id") @db.VarChar(255)
+  stripePriceId         String?   @map("stripe_price_id") @db.VarChar(255)
+  billingCycle          String?   @map("billing_cycle") @db.VarChar(20) // 'monthly' | 'yearly'
+  nextBillingDate       DateTime? @map("next_billing_date") @db.Timestamp(6)
+  trialEndsAt           DateTime? @map("trial_ends_at") @db.Timestamp(6)
+  stripeInvoiceId       String?   @map("stripe_invoice_id") @db.VarChar(255)
+  // Subscription schedule — set when a future plan change is scheduled via Stripe Subscription Schedules
+  stripeScheduleId      String?   @map("stripe_schedule_id") @db.VarChar(255)
+  // EC19: one-time-use trial token hash — set when token issued, cleared after first use
+  trialTokenHash        String?   @map("trial_token_hash") @db.VarChar(64)
+  // Scheduled plan change — set when a future plan/cycle change is pending
+  scheduledPlanId       String?   @map("scheduled_plan_id") @db.Uuid
+  scheduledBillingCycle String?   @map("scheduled_billing_cycle") @db.VarChar(10)
+  // Price snapshot — locked at subscription creation so plan edits don't reprice existing subscribers
+  lockedMonthlyAmount   Int?      @map("locked_monthly_amount_cents")
+  lockedYearlyAmount    Int?      @map("locked_yearly_amount_cents")
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  tenant           Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pricingPlan      PricingPlan  @relation(fields: [pricingPlanId], references: [id])
+  scheduledPlan    PricingPlan? @relation("ScheduledPlan", fields: [scheduledPlanId], references: [id])
+  status           MasterData   @relation("TenantSubscriptionStatus", fields: [statusId], references: [id])
+  currentForTenant Tenant?      @relation("CurrentSubscription")
+
+  @@index([tenantId])
+  @@index([pricingPlanId])
+  @@index([statusId])
+  @@index([stripeSubscriptionId])
+  @@index([stripeCustomerId])
+  @@map("tenant_subscriptions")
+}
+
+model User {
+  id              String    @id @default(uuid()) @db.Uuid
+  entraId         String?   @unique @map("entra_id") @db.VarChar(255) // Entra External ID user object ID (sub from id_token)
+  upn             String?   @map("upn") @db.VarChar(255) // User Principal Name from Entra (e.g. email format)
+  email           String    @unique @db.VarChar(255)
+  name            String?   @db.VarChar(255)
+  workPhone       String?   @map("work_phone") @db.VarChar(50)
+  profileImageUrl String?   @map("profile_image_url") @db.VarChar(500)
+  authProvider    String    @default("local") @map("auth_provider") @db.VarChar(20) // 'local' | 'microsoft' | 'google'
+  isPrimaryUser   Boolean?  @map("is_primary_user") // true for the first registered user (tenant owner); null for all other users
+  isCiAdmin       Boolean   @default(false) @map("is_ci_admin") // true for CI Admin users; false for all regular tenant users.
+  mfaEnabled      Boolean   @default(false) @map("mfa_enabled")
+  mfaPending      Boolean   @default(false) @map("mfa_pending") // true when MFA enabled at setup but not yet verified
+  inviteToken     String?   @map("invite_token") @db.VarChar(500) // hashed tenant user invite token (one-time use)
+  statusId        String    @map("status_id") @db.Uuid
+  lastSignInAt    DateTime? @map("last_sign_in_at") @db.Timestamp(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  status             MasterData          @relation("UserStatus", fields: [statusId], references: [id])
+  userTenants        UserTenant[]
+  passwordResetCodes PasswordResetCode[]
+  apiKeys            ApiKey[]
+
+  @@index([email])
+  @@map("users")
+}
+
+model UserTenant {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  tenantId       String    @map("tenant_id") @db.Uuid
+  roleIds        String[]  @default([]) @map("role_ids") // UUIDs from tenant schema roles table (no FK across schemas)
+  statusId       String    @map("status_id") @db.Uuid
+  invitedAt      DateTime? @map("invited_at") @db.Timestamp(6)
+  activatedAt    DateTime? @map("activated_at") @db.Timestamp(6)
+  deletedAt      DateTime? @map("deleted_at") @db.Timestamp(6)
+  // Work profile — tenant-specific user attributes
+  department     String?   @map("department") @db.VarChar(255)
+  jobTitle       String?   @map("job_title") @db.VarChar(255)
+  workLocation   String?   @map("work_location") @db.VarChar(255)
+  managerId      String?   @map("manager_id") @db.Uuid // references public.users.id (no FK across tenant boundary)
+  internalNotes  String?   @map("internal_notes") @db.Text
+  customElements  Json?    @map("custom_elements") @db.JsonB
+  isEulaAccepted  Boolean  @default(false) @map("is_eula_accepted") // true after user accepts the current EULA; reset to false when CI Admin uploads a new EULA version
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  status MasterData @relation("UserTenantStatus", fields: [statusId], references: [id])
+  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tenantId])
+  @@index([userId])
+  @@index([tenantId])
+  @@index([statusId])
+  @@map("user_tenants")
+}
+
+model PasswordResetCode {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  purpose    String   @default("password-reset") @db.VarChar(32) // 'password-reset' | 'account-verification'
+  code       String   @db.Text // hashed OTP or refresh token (mfa-login-session)
+  codeExpiry DateTime @map("code_expiry") @db.Timestamp(6)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, purpose])
+  @@map("password_reset_codes")
+}
+
+model ApiKey {
+  id            String    @id @default(uuid()) @db.Uuid
+  keyId         String    @unique @map("key_id") @db.VarChar(32)
+  keyHash       String    @map("key_hash") @db.VarChar(255)
+  displayPrefix String    @map("display_prefix") @db.VarChar(24)
+  name          String    @db.VarChar(255)
+  source        String    @default("generic") @map("source") @db.VarChar(100)
+  tenantId      String    @map("tenant_id") @db.Uuid
+  createdById   String    @map("created_by_id") @db.Uuid
+  lastUsedAt    DateTime? @map("last_used_at") @db.Timestamp(6)
+  expiresAt     DateTime? @map("expires_at") @db.Timestamp(6)
+  revokedAt     DateTime? @map("revoked_at") @db.Timestamp(6)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id])
+  createdBy User   @relation(fields: [createdById], references: [id])
+
+  @@index([keyId])
+  @@index([tenantId])
+  @@map("api_keys")
+}
+
+// Global RAG chunk store — one row per chunk per blob in the `rag-docs`
+// Azure Blob container. Shared across all tenants (the user manual is the
+// same content for every tenant). Written by the agent-platform's
+// rag_sync.py background poller; read by its search_user_manual tool.
+// pgvector's `vector` type is not a first-class Prisma type, so we use
+// `Unsupported(...)` — Nest/Prisma never touches this table.
+model RagChunk {
+  id          String                       @id @default(uuid()) @db.Uuid
+  blobName    String                       @map("blob_name")
+  blobEtag    String                       @map("blob_etag")
+  chunkIndex  Int                          @map("chunk_index")
+  chunkText   String                       @map("chunk_text")
+  contentHash String                       @map("content_hash")
+  embedding   Unsupported("vector(1536)")
+  metadata    Json                         @default("{}")
+  createdAt   DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime                     @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([blobName, chunkIndex], map: "rag_chunks_blob_chunk_uq")
+  @@index([blobName], map: "rag_chunks_blob_name_idx")
+  @@map("rag_chunks")
+}
+
+// ============================================
+// TENANT SCHEMA MODELS (tenant_template)
+// ============================================
+// These models define the structure for all tenant schemas.
+// They are defined in the "tenant_template" schema for Prisma migrations.
+//
+// When creating a new tenant:
+// 1. Prisma migrations generate SQL from these models
+// 2. Migration scripts apply the SQL to each tenant schema (tenant_{slug})
+// 3. All tenant schemas have the same structure
+//
+// To query tenant data, use PrismaService.withTenant() which sets search_path
+// to the tenant schema before executing queries.
+
+model ManufacturingOrder {
+  id                String    @id @default(uuid()) @db.Uuid
+  reference         String    @unique @db.VarChar(20) // WH/MO/00001, auto-generated
+  productId         String    @map("product_id") @db.Uuid
+  bomId             String?   @map("bom_id") @db.Uuid // optional: non-catalog starts without BOM
+  quantity          Decimal   @db.Decimal(12, 4)
+  scheduledDate     DateTime? @map("scheduled_date") @db.Timestamp(6)
+  statusId          String    @map("status_id") @db.Uuid // FK → MasterData (MO_STATUS)
+  componentStatusId String    @map("component_status_id") @db.Uuid // FK → MasterData (MO_COMPONENT_STATUS)
+  warehouseId       String?   @map("warehouse_id") @db.Uuid
+  quotationId       String?   @map("quotation_id") @db.Uuid // FK → Quotation (set when SO triggers MO creation; one per line item)
+  plannedCompletionDate DateTime? @map("planned_completion_date") @db.Timestamp(6) // derived: MAX(scheduledEnd) across active work orders
+  confirmedAt       DateTime? @map("confirmed_at") @db.Timestamp(6)
+  completedAt       DateTime? @map("completed_at") @db.Timestamp(6)
+  cancelledAt       DateTime? @map("cancelled_at") @db.Timestamp(6)
+  customElements    Json?     @map("custom_elements") @db.JsonB
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamp(6)
+  createdBy         String    @map("created_by") @db.Uuid
+  updatedBy         String?   @map("updated_by") @db.Uuid
+
+  product                Product?                @relation("MOProduct", fields: [productId], references: [id], onDelete: Restrict)
+  bom                    Bom?                    @relation(fields: [bomId], references: [id], onDelete: Restrict)
+  warehouse              Warehouse?              @relation("MOWarehouse", fields: [warehouseId], references: [id], onDelete: SetNull)
+  status_rel             MasterData              @relation("MOStatus", fields: [statusId], references: [id], onDelete: Restrict)
+  componentStatus_rel    MasterData              @relation("MOComponentStatus", fields: [componentStatusId], references: [id], onDelete: Restrict)
+  quotation_rel          Quotation?              @relation("QuotationMOs", fields: [quotationId], references: [id], onDelete: SetNull)
+  components             MOComponent[]
+  workOrders             WorkOrder[]
+  finishedGoodsTransfers FinishedGoodsTransfer[]
+
+  @@index([statusId])
+  @@index([componentStatusId])
+  @@index([productId])
+  @@index([bomId])
+  @@index([warehouseId])
+  @@index([quotationId])
+  @@map("manufacturing_orders")
+}
+
+model Bom {
+  id             String    @id @default(uuid()) @db.Uuid
+  code           String    @unique @db.VarChar(20) // Auto-generated e.g. BOM-00001
+  name           String    @db.VarChar(255)
+  productId      String?   @unique @map("product_id") @db.Uuid
+  description    String?   @db.Text
+  version        String?   @db.VarChar(50)
+  locked         Boolean   @default(false) @db.Boolean
+  imageUrl       String?   @map("image_url") @db.VarChar(500)
+  customElements Json?     @map("custom_elements") @db.JsonB
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  createdBy      String    @map("created_by") @db.Uuid
+  updatedBy      String?   @map("updated_by") @db.Uuid
+  deletedAt      DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  product             Product?             @relation("BomProduct", fields: [productId], references: [id], onDelete: Restrict)
+  manufacturingOrders ManufacturingOrder[]
+  operations          Operations[]
+  components          BomComponent[]
+  operationOrders     BomOperationOrder[]
+
+  @@index([productId])
+  @@index([code])
+  @@map("boms")
+}
+
+/// BomComponent - A component line in a BOM (either an Item or a sub-assembly Product)
+model BomComponent {
+  id            String   @id @default(uuid()) @db.Uuid
+  bomId         String   @map("bom_id") @db.Uuid
+  itemId        String?  @map("item_id") @db.Uuid // FK to Item (raw material / goods)
+  productId     String?  @map("product_id") @db.Uuid // FK to Product (sub-assembly)
+  componentType String   @map("component_type") @db.VarChar(10) // 'item' | 'product'
+  quantity      Decimal  @db.Decimal(12, 4)
+  unitOfMeasure String?  @map("unit_of_measure") @db.VarChar(50)
+  notes         String?  @db.Text
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+  createdBy     String   @map("created_by") @db.Uuid
+  updatedBy     String?  @map("updated_by") @db.Uuid
+
+  bom     Bom      @relation(fields: [bomId], references: [id], onDelete: Cascade)
+  item    Item?    @relation("BomComponentItem", fields: [itemId], references: [id], onDelete: SetNull)
+  product Product? @relation("BomComponentProduct", fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([bomId])
+  @@index([itemId])
+  @@index([productId])
+  @@map("bom_components")
+}
+
+model InventoryItem {
+  id        String   @id @default(uuid()) @db.Uuid
+  sku       String   @unique @db.VarChar(100)
+  name      String   @db.VarChar(255)
+  quantity  Int      @default(0)
+  unit      String?  @db.VarChar(50)
+  location  String?  @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@map("inventory_items")
+}
+
+/// Warehouse - Physical storage location
+model Warehouse {
+  id               String    @id @default(uuid()) @db.Uuid
+  warehouseName    String    @map("warehouse_name") @db.VarChar(255)
+  shortName        String    @map("short_name") @db.VarChar(50)
+  warehouseManager String?   @map("warehouse_manager") @db.Uuid // FK to users.id in public schema (optional)
+  warehouseAddress String?   @map("warehouse_address") @db.Text
+  warehouseType    String    @default("none") @map("warehouse_type") @db.VarChar(20) // product | item | both | none
+  status           String    @default("active") @db.VarChar(20) // active, inactive
+  customElements   Json?     @map("custom_elements") @db.JsonB
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  createdBy        String    @map("created_by") @db.Uuid
+  updatedBy        String?   @map("updated_by") @db.Uuid
+  deletedAt        DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  sections               WarehouseSection[]
+  itemsAsDefault         Item[]                        @relation("DefaultWarehouse")
+  itemWarehouses         ItemWarehouse[]
+  productsAsDefault      Product[]                     @relation("ProductDefaultWarehouse")
+  productAlternatives    ProductAlternativeWarehouse[] @relation("ProductAlternativeWarehouse")
+  goodsReceivedNotes     GoodsReceivedNote[]
+  manufacturingOrders    ManufacturingOrder[]          @relation("MOWarehouse")
+  finishedGoodsTransfers FinishedGoodsTransfer[]       @relation("FinishedGoodsWarehouse")
+
+  @@index([status])
+  @@index([warehouseManager])
+  @@map("warehouses")
+}
+
+/// Item - Inventory item (goods/services) with ROP, pricing, warehouses
+model Item {
+  id                    String    @id @default(uuid()) @db.Uuid
+  itemName              String    @map("item_name") @db.VarChar(255)
+  partNumber            String?   @map("part_number") @db.VarChar(100)
+  itemType              String    @map("item_type") @db.VarChar(50) // Services, Goods, Combo
+  unitCost              Decimal?  @map("unit_cost") @db.Decimal(18, 4)
+  unitOfMeasurement     String?   @map("unit_of_measurement") @db.VarChar(50)
+  rop                   Int?      @default(0) @map("rop") // Reorder point
+  defaultWarehouseId    String?   @map("default_warehouse_id") @db.Uuid
+  priceValidityDays     Int?      @map("price_validity_days")
+  notes                 String?   @db.Text
+  imageUrl              String?   @map("image_url") @db.VarChar(500)
+  availableQuantity     Decimal   @default(0) @map("available_quantity") @db.Decimal(10, 2) // Available stock quantity
+  forecastedQuantity    Decimal   @default(0) @map("forecasted_quantity") @db.Decimal(10, 2) // Forecasted quantity
+  /// STALE — never recalculated after insert; keeps its insert-time default ('Available'). NEVER read or GROUP BY this column. Derive instead: CASE WHEN available_quantity > COALESCE(rop,0) THEN 'Available' WHEN available_quantity < COALESCE(rop,0) THEN 'Below ROP' ELSE 'ROP Reached' END
+  ropStatus             String    @default("Available") @map("rop_status") @db.VarChar(20) // Available, Below ROP, ROP Reached
+  pricingValidityStatus String    @default("Valid") @map("pricing_validity_status") @db.VarChar(20) // Valid, Out of Date
+  status                String    @default("Active") @db.VarChar(20) // Active, Inactive
+  customElements        Json?     @map("custom_elements") @db.JsonB
+  integrationItemId       String?   @map("integration_item_id") @db.VarChar(50)
+  integrationSyncStatus   String?   @map("integration_sync_status") @db.VarChar(20) // pending | synced | failed
+  integrationSyncedAt     DateTime? @map("integration_synced_at") @db.Timestamp(6)
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  priceValidFrom        DateTime? @map("price_valid_from") @db.Timestamp(6)
+  priceValidTo          DateTime? @map("price_valid_to") @db.Timestamp(6)
+  createdBy             String    @map("created_by") @db.Uuid
+  updatedBy             String?   @map("updated_by") @db.Uuid
+  deletedAt             DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  defaultWarehouse      Warehouse?                @relation("DefaultWarehouse", fields: [defaultWarehouseId], references: [id], onDelete: SetNull)
+  alternativeWarehouses ItemWarehouse[]
+  vendors               ItemVendor[]
+  vendorMappings        VendorItemMapping[]       @relation("VendorItemMappingToItem")
+  organisationMappings  OrganisationItemMapping[] @relation("OrganisationItemMappingToItem")
+  bomComponents         BomComponent[]            @relation("BomComponentItem")
+  moComponents          MOComponent[]             @relation("MOComponentItem")
+
+  @@index([defaultWarehouseId])
+  @@index([itemType])
+  @@index([partNumber])
+  @@index([ropStatus])
+  @@index([deletedAt])
+  @@map("items")
+}
+
+/// ItemWarehouse - Alternative warehouses for an item (many-to-many), with optional section/shelf location
+model ItemWarehouse {
+  id          String  @id @default(uuid()) @db.Uuid
+  itemId      String  @map("item_id") @db.Uuid
+  warehouseId String  @map("warehouse_id") @db.Uuid
+  sectionId   String? @map("section_id") @db.Uuid
+  shelfId     String? @map("shelf_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  item      Item              @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  warehouse Warehouse         @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  section   WarehouseSection? @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  shelf     WarehouseShelf?   @relation(fields: [shelfId], references: [id], onDelete: SetNull)
+
+  @@unique([itemId, warehouseId])
+  @@index([itemId])
+  @@index([warehouseId])
+  @@index([sectionId])
+  @@index([shelfId])
+  @@map("item_warehouses")
+}
+
+/// ItemVendor - Vendor assignment for an item (lead time, unit price)
+model ItemVendor {
+  id               String    @id @default(uuid()) @db.Uuid
+  itemId           String    @map("item_id") @db.Uuid
+  vendorId         String    @map("vendor_id") @db.Uuid
+  vendorName       String?   @map("vendor_name") @db.VarChar(255)
+  leadTimeDays     Int?      @map("lead_time_days")
+  unitPrice        Decimal?  @map("unit_price") @db.Decimal(18, 4)
+  priceLastUpdated DateTime? @map("price_last_updated") @db.Timestamp(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId])
+  @@index([vendorId])
+  @@map("item_vendors")
+}
+
+/// WarehouseSection - Logical section within a warehouse
+model WarehouseSection {
+  id          String    @id @default(uuid()) @db.Uuid
+  warehouseId String    @map("warehouse_id") @db.Uuid
+  sectionName String    @map("section_name") @db.VarChar(255)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  warehouse      Warehouse        @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  shelves        WarehouseShelf[]
+  itemWarehouses ItemWarehouse[]
+
+  @@index([warehouseId])
+  @@map("warehouse_sections")
+}
+
+/// WarehouseShelf - Shelf within a warehouse section
+model WarehouseShelf {
+  id        String    @id @default(uuid()) @db.Uuid
+  sectionId String    @map("section_id") @db.Uuid
+  shelfName String    @map("shelf_name") @db.VarChar(255)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  section        WarehouseSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  itemWarehouses ItemWarehouse[]
+
+  @@index([sectionId])
+  @@map("warehouse_shelves")
+}
+
+model FormConfiguration {
+  id         String    @id @default(uuid()) @db.Uuid
+  formName   String    @map("form_name") @db.VarChar(255)
+  formCode   String    @unique @map("form_code") @db.VarChar(100)
+  formSchema Json      @map("form_schema")
+  statusId   String    @map("status_id") @db.Uuid // References master_data.id (FORM_CONFIGURATION_STATUS: Active/Inactive)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt  DateTime? @updatedAt @map("updated_at") @db.Timestamp(6)
+  updatedBy  String?   @map("updated_by") @db.VarChar(255)
+
+  status MasterData @relation("FormConfigStatus", fields: [statusId], references: [id])
+
+  @@index([formCode])
+  @@index([statusId])
+  @@map("form_configurations")
+}
+
+/// GeneralConfiguration - Singleton row per tenant storing all general app settings as JSONB
+model GeneralConfiguration {
+  id        String   @id @default(uuid()) @db.Uuid
+  settings  Json     @map("settings") @db.JsonB
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+  updatedBy String?  @map("updated_by") @db.VarChar(255)
+
+  @@map("general_configurations")
+}
+
+// Master Data Category - Used to categorize master data entries
+model MasterDataCategory {
+  id            String    @id @default(uuid()) @db.Uuid
+  name          String    @db.VarChar(255)
+  description   String?   @db.VarChar(255)
+  code          String?   @db.VarChar(255)
+  status        String    @db.VarChar(10) // active, inactive
+  icon          String?   @db.VarChar(255)
+  color         String?   @db.VarChar(255)
+  isSystemFixed Boolean   @default(false) @map("is_system_fixed")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  createdBy     String?   @map("created_by") @db.Uuid
+  updatedBy     String?   @map("updated_by") @db.Uuid
+  deletedAt     DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  masterDataEntries MasterData[]
+
+  @@index([code])
+  @@index([status])
+  @@map("master_data_category")
+}
+
+// Master Data - Reference data entries used to populate dropdowns
+model MasterData {
+  id            String    @id @default(uuid()) @db.Uuid
+  categoryId    String    @map("category_id") @db.Uuid
+  name          String    @db.VarChar(255)
+  description   String?   @db.VarChar(255)
+  code          String?   @db.VarChar(255)
+  status        String    @db.VarChar(10) // active, inactive
+  icon          String?   @db.VarChar(255)
+  color         String?   @db.VarChar(255)
+  isSystemFixed Boolean   @default(false) @map("is_system_fixed")
+  parentId      String?   @map("parent_id") @db.Uuid
+  metadata      Json?     @db.JsonB
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  createdBy     String?   @map("created_by") @db.Uuid
+  updatedBy     String?   @map("updated_by") @db.Uuid
+  deletedAt     DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  category                   MasterDataCategory   @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  parent                     MasterData?          @relation("MasterDataParent", fields: [parentId], references: [id], onDelete: SetNull)
+  children                   MasterData[]         @relation("MasterDataParent")
+  formConfigurationsAsStatus FormConfiguration[]  @relation("FormConfigStatus")
+  operationsAsOperationType  Operations[]         @relation("OperationType")
+  workCentersWorkingHours    WorkCenter[]         @relation("WorkCenterWorkingHours")
+  vendorTypes                Vendor[]             @relation("VendorType")
+  vendorCountries            Vendor[]             @relation("VendorCountry")
+  vendorStatuses             Vendor[]             @relation("VendorStatus")
+  contactCountries           Contact[]            @relation("ContactCountry")
+  contactShippingCountries   Contact[]            @relation("ContactShippingCountry")
+  contactLifeCycleStatuses   Contact[]            @relation("ContactLifeCycleStatus")
+  tenantStatuses             Tenant[]             @relation("TenantStatus")
+  userStatuses               User[]               @relation("UserStatus")
+  userTenantStatuses         UserTenant[]         @relation("UserTenantStatus")
+  productsType               Product[]            @relation("ProductType")
+  templateTypes              Template[]           @relation("TemplateType")
+  templateStatuses           Template[]           @relation("TemplateStatus")
+  quotationStages            Quotation[]          @relation("QuotationStage")
+  quotationStatuses          Quotation[]          @relation("QuotationStatus")
+  quotationPaymentTerms      Quotation[]          @relation("QuotationPaymentTerms")
+  organisationCompanyTypes   Organisation[]       @relation("OrganisationCompanyType")
+  organisationCountries      Organisation[]       @relation("OrganisationCountry")
+  organisationStatuses       Organisation[]       @relation("OrganisationStatus")
+  tenantSubscriptionStatuses TenantSubscription[] @relation("TenantSubscriptionStatus")
+  moStatuses                 ManufacturingOrder[] @relation("MOStatus")
+  moComponentStatuses        ManufacturingOrder[] @relation("MOComponentStatus")
+  moComponentAvailabilities  MOComponent[]        @relation("MOComponentAvailability")
+  workOrderStatuses          WorkOrder[]          @relation("WorkOrderStatus")
+  integrationConnectionStatuses Integration[]      @relation("IntegrationConnectionStatus")
+  templateMappingStatuses       TemplateMapping[]  @relation("TemplateMappingStatus")
+
+  @@index([categoryId])
+  @@index([code])
+  @@index([status])
+  @@index([parentId])
+  @@map("master_data")
+}
+
+// Vendor Management - CRM Sales Domain
+/// @deprecated — Legacy vendor model. New code should use Organisation with companyTypeId = ORGANISATION_TYPE_VENDOR or ORGANISATION_TYPE_BOTH.
+/// Kept for backward compatibility while the data migration is in progress. Do NOT add new fields here.
+model Vendor {
+  id                  String    @id @default(uuid()) @db.Uuid
+  vendorTypeId        String    @map("vendor_type_id") @db.Uuid // FK to master_data (VENDOR_TYPE)
+  name                String    @db.VarChar(255)
+  email               String    @db.VarChar(255)
+  companyName         String    @map("company_name") @db.VarChar(255)
+  abnNo               String?   @map("abn_no") @db.VarChar(11) // Australian Business Number (optional)
+  phone               String    @db.VarChar(50)
+  addressLine01       String    @map("address_line_01") @db.VarChar(255)
+  addressLine02       String?   @map("address_line_02") @db.VarChar(255)
+  city                String    @db.VarChar(100)
+  state               String    @db.VarChar(100)
+  postalCode          String    @map("postal_code") @db.VarChar(20)
+  countryId           String    @map("country_id") @db.Uuid // FK to master_data (COUNTRY)
+  primaryContactName  String?   @map("primary_contact_name") @db.VarChar(255)
+  primaryContactEmail String?   @map("primary_contact_email") @db.VarChar(255)
+  primaryContactPhone String?   @map("primary_contact_phone") @db.VarChar(50)
+  statusId            String    @map("status_id") @db.Uuid // FK to master_data (STATUS)
+  customElements      Json?     @map("custom_elements") @db.JsonB
+  addedDate           DateTime  @default(now()) @map("added_date") @db.Timestamp(6)
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  createdBy           String    @map("created_by") @db.Uuid
+  updatedBy           String?   @map("updated_by") @db.Uuid
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  vendorType_rel     MasterData          @relation("VendorType", fields: [vendorTypeId], references: [id], onDelete: Restrict)
+  country_rel        MasterData          @relation("VendorCountry", fields: [countryId], references: [id], onDelete: Restrict)
+  status_rel         MasterData          @relation("VendorStatus", fields: [statusId], references: [id], onDelete: Restrict)
+  vendorItemMappings VendorItemMapping[]
+
+  @@unique([name])
+  @@unique([email])
+  @@index([name])
+  @@index([email])
+  @@index([vendorTypeId])
+  @@index([statusId])
+  @@index([addedDate])
+  @@map("vendors")
+}
+
+/// Organisation - Unified entity replacing Vendor (covers both customers and suppliers)
+model Organisation {
+  id             String    @id @default(uuid()) @db.Uuid
+  companyName    String    @map("company_name") @db.VarChar(255)
+  companyTypeId  String    @map("company_type_id") @db.Uuid // FK → master_data (ORGANISATION_TYPE: Vendor, Customer, Both)
+  email          String    @db.VarChar(255)
+  phone          String?   @db.VarChar(50)
+  abnNo          String?   @map("abn_no") @db.VarChar(11)
+  addressLine01  String    @map("address_line_01") @db.VarChar(255)
+  addressLine02  String?   @map("address_line_02") @db.VarChar(255)
+  city           String    @db.VarChar(100)
+  state          String    @db.VarChar(100)
+  postalCode     String    @map("postal_code") @db.VarChar(20)
+  countryId      String    @map("country_id") @db.Uuid // FK → master_data (COUNTRY)
+  statusId            String    @map("status_id") @db.Uuid // FK → master_data (STATUS)
+  customElements      Json?     @map("custom_elements") @db.JsonB
+  integrationVendorId   String?   @map("integration_vendor_id") @db.VarChar(50)
+  integrationCustomerId String?   @map("integration_customer_id") @db.VarChar(50)
+  integrationSyncStatus String?   @map("integration_sync_status") @db.VarChar(20) // pending | synced | failed
+  integrationSyncedAt   DateTime? @map("integration_synced_at") @db.Timestamp(6)
+  addedDate           DateTime  @default(now()) @map("added_date") @db.Timestamp(6)
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  createdBy           String    @map("created_by") @db.Uuid
+  updatedBy           String?   @map("updated_by") @db.Uuid
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  companyType_rel MasterData                @relation("OrganisationCompanyType", fields: [companyTypeId], references: [id], onDelete: Restrict)
+  country_rel     MasterData                @relation("OrganisationCountry", fields: [countryId], references: [id], onDelete: Restrict)
+  status_rel      MasterData                @relation("OrganisationStatus", fields: [statusId], references: [id], onDelete: Restrict)
+  contacts           OrganisationContact[]
+  purchaseOrders     PurchaseOrder[]
+  itemMappings       OrganisationItemMapping[]
+  quotations         Quotation[]               @relation("QuotationOrganisation")
+  goodsReceivedNotes GoodsReceivedNote[]
+
+  @@unique([email])
+  @@index([companyName])
+  @@index([email])
+  @@index([companyTypeId])
+  @@index([statusId])
+  @@index([addedDate])
+  @@map("organisations")
+}
+
+/// Organisation ↔ Contact junction (many-to-many)
+model OrganisationContact {
+  id             String   @id @default(uuid()) @db.Uuid
+  organisationId String   @map("organisation_id") @db.Uuid
+  contactId      String   @map("contact_id") @db.Uuid
+  isPrimary      Boolean  @default(false) @map("is_primary")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, contactId])
+  @@index([organisationId])
+  @@index([contactId])
+  @@map("organisation_contacts")
+}
+
+/// Organisation Item Mapping - Items supplied by / associated with an organisation
+model OrganisationItemMapping {
+  id                String   @id @default(uuid()) @db.Uuid
+  organisationId    String   @map("organisation_id") @db.Uuid
+  itemId            String   @map("item_id") @db.Uuid
+  unitPrice         Decimal  @map("unit_price") @db.Decimal(10, 2)
+  leadTimeDays      Int      @map("lead_time_days")
+  priceLastUpdated  DateTime @default(now()) @map("price_last_updated") @db.Timestamp(6)
+  priceValidityDays Int?     @map("price_validity_days")
+  isPrimary                Boolean  @default(false) @map("is_primary")
+  overrideRemark           String?  @map("override_remark")
+  organisationPartNumber   String?  @map("organisation_part_number") @db.VarChar(255)
+  note                     String?  @map("note") @db.VarChar(500)
+  createdAt                DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt                DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  item         Item         @relation("OrganisationItemMappingToItem", fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, itemId])
+  @@index([organisationId])
+  @@index([itemId])
+  @@index([isPrimary])
+  @@map("organisation_item_mappings")
+}
+
+// Vendor Item Mappings - Products supplied by vendors
+model VendorItemMapping {
+  id                String   @id @default(uuid()) @db.Uuid
+  vendorId          String   @map("vendor_id") @db.Uuid
+  itemId            String   @map("item_id") @db.Uuid
+  unitPrice         Decimal  @map("unit_price") @db.Decimal(10, 2)
+  leadTimeDays      Int      @map("lead_time_days")
+  priceLastUpdated  DateTime @default(now()) @map("price_last_updated") @db.Timestamp(6)
+  priceValidityDays Int?     @map("price_validity_days")
+  isPrimary         Boolean  @default(false) @map("is_primary")
+  overrideRemark    String?  @map("override_remark")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  item   Item   @relation("VendorItemMappingToItem", fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([vendorId, itemId])
+  @@index([vendorId])
+  @@index([itemId])
+  @@index([isPrimary])
+  @@map("vendor_item_mappings")
+}
+
+/// Contact - CRM Contact management
+model Contact {
+  id                  String    @id @default(uuid()) @db.Uuid
+  name                String    @db.VarChar(255)
+  email               String    @db.VarChar(255)
+  organisationName    String?   @map("organisation_name") @db.VarChar(255)
+  abnNo               String?   @map("abn_no") @db.VarChar(11) // Australian Business Number (optional)
+  phone               String?   @db.VarChar(16)
+  addressLine01       String?   @map("address_line_01") @db.VarChar(255)
+  addressLine02       String?   @map("address_line_02") @db.VarChar(255)
+  city                String?   @db.VarChar(100)
+  state               String?   @db.VarChar(100)
+  postalCode          String?   @map("postal_code") @db.VarChar(30)
+  countryId           String?   @map("country_id") @db.Uuid // FK to master_data (COUNTRY)
+  sameAsBillingAddress  Boolean   @default(true) @map("same_as_billing_address")
+  shippingAddressLine01 String?   @map("shipping_address_line_01") @db.VarChar(255)
+  shippingAddressLine02 String?   @map("shipping_address_line_02") @db.VarChar(255)
+  shippingCity          String?   @map("shipping_city") @db.VarChar(100)
+  shippingState         String?   @map("shipping_state") @db.VarChar(100)
+  shippingPostalCode    String?   @map("shipping_postal_code") @db.VarChar(30)
+  shippingCountryId     String?   @map("shipping_country_id") @db.Uuid // FK to master_data (COUNTRY)
+  primaryContactName  String?   @map("primary_contact_name") @db.VarChar(255)
+  primaryContactEmail String?   @map("primary_contact_email") @db.VarChar(255)
+  primaryContactPhone String?   @map("primary_contact_phone") @db.VarChar(16)
+  lifeCycleStatusId      String    @map("life_cycle_status_id") @db.Uuid // FK to master_data (CONTACT_LIFECYCLE_STATUS: Customer, Contact)
+  customElements         Json?     @map("custom_elements") @db.JsonB
+  integrationCustomerId    String?   @map("integration_customer_id") @db.VarChar(50)
+  integrationSyncStatus    String?   @map("integration_sync_status") @db.VarChar(20) // pending | synced | failed
+  integrationSyncedAt      DateTime? @map("integration_synced_at") @db.Timestamp(6)
+  addedDate              DateTime  @default(now()) @map("added_date") @db.Timestamp(6)
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  createdBy           String    @map("created_by") @db.Uuid
+  updatedBy           String?   @map("updated_by") @db.Uuid
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  country_rel         MasterData?           @relation("ContactCountry", fields: [countryId], references: [id], onDelete: SetNull)
+  shippingCountry_rel MasterData?           @relation("ContactShippingCountry", fields: [shippingCountryId], references: [id], onDelete: SetNull)
+  lifeCycleStatus_rel MasterData            @relation("ContactLifeCycleStatus", fields: [lifeCycleStatusId], references: [id], onDelete: Restrict)
+  quotations          Quotation[]           @relation("QuotationContact")
+  organisations       OrganisationContact[]
+
+  @@unique([email])
+  @@index([name])
+  @@index([email])
+  @@index([lifeCycleStatusId])
+  @@index([addedDate])
+  @@map("contacts")
+}
+
+/// Product - Manufacturing product definition
+model Product {
+  id                 String    @id @default(uuid()) @db.Uuid
+  sku                String    @unique @db.VarChar(100)
+  name               String    @db.VarChar(255)
+  productTypeId      String    @map("product_type_id") @db.Uuid // FK → MasterData (PRODUCT_TYPE)
+  salesPrice         Decimal   @map("sales_price") @db.Decimal(12, 2)
+  unitCost           Decimal   @map("unit_cost") @db.Decimal(12, 2)
+  projectType        String    @map("project_type") @db.VarChar(50) // catalog_item, non_catalog_item
+  route              String    @default("manufacture") @db.VarChar(50) // manufacture, buy
+  defaultWarehouseId String    @map("default_warehouse_id") @db.Uuid // FK → Warehouse (required)
+  onHand             Decimal   @default(0) @map("on_hand") @db.Decimal(12, 2)
+  forecasted         Decimal   @default(0) @db.Decimal(12, 2)
+  reservedQuantity   Decimal   @default(0) @map("reserved_quantity") @db.Decimal(12, 2)
+  notes              String?   @db.Text
+  imageUrl           String?   @map("image_url") @db.VarChar(500)
+  customElements     Json?     @map("custom_elements") @db.JsonB
+  integrationItemId    String?   @map("integration_item_id") @db.VarChar(50)
+  integrationSyncStatus String?  @map("integration_sync_status") @db.VarChar(20) // pending | synced | failed
+  integrationSyncedAt  DateTime? @map("integration_synced_at") @db.Timestamp(6)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  createdBy          String    @map("created_by") @db.Uuid
+  updatedBy          String?   @map("updated_by") @db.Uuid
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  // ── Relations ──────────────────────────────────────────────────────────────
+  productType           MasterData                    @relation("ProductType", fields: [productTypeId], references: [id])
+  defaultWarehouse      Warehouse                     @relation("ProductDefaultWarehouse", fields: [defaultWarehouseId], references: [id], onDelete: Restrict)
+  alternativeWarehouses ProductAlternativeWarehouse[]
+  bomAsProduct          Bom?                          @relation("BomProduct")
+  bomComponents         BomComponent[]                @relation("BomComponentProduct")
+  quotationLineItems    QuotationLineItem[]           @relation("QuotationLineItem")
+  manufacturingOrders   ManufacturingOrder[]          @relation("MOProduct")
+  moComponents          MOComponent[]                 @relation("MOComponentProduct")
+
+  @@unique([name])
+  @@index([deletedAt])
+  @@index([productTypeId])
+  @@index([sku])
+  @@index([defaultWarehouseId])
+  @@map("products")
+}
+
+/// ProductAlternativeWarehouse - Join table for product ↔ alternative warehouse many-to-many
+model ProductAlternativeWarehouse {
+  productId   String @map("product_id") @db.Uuid
+  warehouseId String @map("warehouse_id") @db.Uuid
+
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouse Warehouse @relation("ProductAlternativeWarehouse", fields: [warehouseId], references: [id], onDelete: Cascade)
+
+  @@id([productId, warehouseId])
+  @@index([productId])
+  @@index([warehouseId])
+  @@map("product_alternative_warehouses")
+}
+
+/// WorkCenter - Manufacturing work center configuration
+model WorkCenter {
+  id                  String    @id @default(uuid()) @db.Uuid
+  name                String    @map("name") @db.VarChar(255)
+  code                String    @map("code") @db.VarChar(50)
+  workingHoursId      String    @map("working_hours_id") @db.Uuid // FK to MasterData (WORKING_HOURS category)
+  setupTime           Float?    @map("setup_time")
+  cleanupTime         Float?    @map("cleanup_time")
+  costPerHour         Float?    @map("cost_per_hour") // Cost per hour for the work center
+  employeeCostPerHour Float?    @map("employee_cost_per_hour") // Cost per hour per employee
+  allowedEmployees    String[]  @default([]) @map("allowed_employees") // Array of employee IDs
+  description         String?   @db.Text
+  customElements      Json?     @map("custom_elements") @db.JsonB
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  createdBy           String    @map("created_by") @db.Uuid
+  updatedBy           String?   @map("updated_by") @db.Uuid
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  workingHours           MasterData              @relation("WorkCenterWorkingHours", fields: [workingHoursId], references: [id])
+  alternativeWorkCenters WorkCenterAlternative[] @relation("WorkCenterHasAlternatives")
+  isAlternativeFor       WorkCenterAlternative[] @relation("WorkCenterIsAlternative")
+  operations             Operations[]
+  workOrders             WorkOrder[]             @relation("WorkOrderWorkCenter")
+
+  @@unique([code])
+  @@index([deletedAt])
+  @@index([workingHoursId])
+  @@map("work_centers")
+}
+
+/// WorkCenterAlternative - Join table for work center self-relation (alternative work centers)
+model WorkCenterAlternative {
+  workCenterId  String @map("work_center_id") @db.Uuid
+  alternativeId String @map("alternative_id") @db.Uuid
+
+  workCenter  WorkCenter @relation("WorkCenterHasAlternatives", fields: [workCenterId], references: [id], onDelete: Cascade)
+  alternative WorkCenter @relation("WorkCenterIsAlternative", fields: [alternativeId], references: [id], onDelete: Cascade)
+
+  @@id([workCenterId, alternativeId])
+  @@index([workCenterId])
+  @@index([alternativeId])
+  @@map("work_center_alternatives")
+}
+
+enum PermissionScope {
+  ALL
+  CREATED_BY_ME
+  UPDATED_BY_ME
+  ASSIGNED_TO_ME
+}
+
+// Privilege Matrix - Roles and permissions per tenant
+model Role {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String    @db.VarChar(255)
+  code      String    @unique @db.VarChar(100)
+  isCustom  Boolean?  @map("is_custom")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamp(6)
+  createdBy String?   @map("created_by") @db.Uuid
+  updatedBy String?   @map("updated_by") @db.Uuid
+
+  rolePermissions RolePermission[]
+
+  @@index([code])
+  @@map("roles")
+}
+
+model Permission {
+  id        String          @id @default(uuid()) @db.Uuid
+  resource  String          @db.VarChar(100)
+  action    String          @db.VarChar(50)
+  scope     PermissionScope @default(ALL)
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt DateTime        @updatedAt @map("updated_at") @db.Timestamp(6)
+  createdBy String?         @map("created_by") @db.Uuid
+  updatedBy String?         @map("updated_by") @db.Uuid
+
+  rolePermissions RolePermission[]
+
+  @@unique([resource, action, scope], name: "resource_action_scope")
+  @@index([resource])
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String @map("role_id") @db.Uuid
+  permissionId String @map("permission_id") @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permission")
+}
+
+/// Audit Log - System activity tracking (tenant-specific)
+model AuditLog {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String?  @map("user_id") @db.Uuid // FK to users.id in public schema (no relation due to cross-schema)
+  userEmail        String?  @map("user_email") @db.VarChar(255)
+  userName         String?  @map("user_name") @db.VarChar(255)
+  module           String   @db.VarChar(100) // e.g., "User Management", "Inventory"
+  action           String   @db.VarChar(50) // "Create", "Update", "Delete", "View"
+  entityType       String?  @map("entity_type") @db.VarChar(100) // e.g., "User", "Warehouse"
+  entityId         String?  @map("entity_id") @db.Uuid
+  affectedRecordId String?  @map("affected_record_id") @db.VarChar(255)
+  oldValues        Json?    @map("old_values") @db.JsonB
+  newValues        Json?    @map("new_values") @db.JsonB
+  metadata         Json?    @db.JsonB // Additional context (request_id, session_id, etc.)
+  ipAddress        String?  @map("ip_address") @db.VarChar(45)
+  userAgent        String?  @map("user_agent") @db.Text
+  timestamp        DateTime @db.Timestamp(6)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  @@index([userId])
+  @@index([module])
+  @@index([action])
+  @@index([timestamp])
+  @@index([entityType, entityId])
+  @@index([timestamp, module])
+  @@map("audit_logs")
+}
+
+/// AI Chat Thread - Tenant-scoped saved conversation container
+model AiChatThread {
+  id              String    @id @default(uuid()) @db.Uuid
+  createdBySub    String    @map("created_by_sub") @db.VarChar(255)
+  createdByUserId String?   @map("created_by_user_id") @db.Uuid // public.users.id snapshot, no cross-schema FK
+  createdByEmail  String?   @map("created_by_email") @db.VarChar(255)
+  createdByName   String?   @map("created_by_name") @db.VarChar(255)
+  title           String?   @db.VarChar(255)
+  lastMessageAt   DateTime? @map("last_message_at") @db.Timestamp(6)
+  metadata        Json?     @db.JsonB
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  messages AiChatMessage[]
+
+  @@index([createdBySub])
+  @@index([lastMessageAt])
+  @@map("ai_chat_threads")
+}
+
+/// AI Chat Message - Tenant-scoped saved user/assistant message
+model AiChatMessage {
+  id            String   @id @default(uuid()) @db.Uuid
+  threadId      String   @map("thread_id") @db.Uuid
+  sequence      Int
+  role          String   @db.VarChar(20)
+  content       String   @db.Text
+  visualization Json?    @db.JsonB
+  inputTokens   Int?     @map("input_tokens")
+  outputTokens  Int?     @map("output_tokens")
+  metadata      Json?    @db.JsonB
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  thread AiChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, sequence])
+  @@map("ai_chat_messages")
+}
+
+/// User Token Quota - Tenant-scoped per-user AI token allocation/usage tracking
+model UserTokenQuota {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @unique @map("user_id") @db.Uuid // public.users.id snapshot, no cross-schema FK
+  totalAllocated  BigInt    @default(0) @map("total_allocated") // total tokens allocated for the current period
+  availableAmount BigInt    @default(0) @map("available_amount") // tokens currently remaining to consume
+  usedAmount      BigInt    @default(0) @map("used_amount") // cumulative tokens consumed in the current period
+  periodStartAt   DateTime? @map("period_start_at") @db.Timestamp(6)
+  periodEndAt     DateTime? @map("period_end_at") @db.Timestamp(6)
+  lastResetAt     DateTime? @map("last_reset_at") @db.Timestamp(6)
+  lastConsumedAt  DateTime? @map("last_consumed_at") @db.Timestamp(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt       DateTime  @default(now()) @map("updated_at") @db.Timestamp(6)
+
+
+  @@index([userId])
+  @@map("user_token_quotas")
+}
+
+/// File - Tenant-scoped uploaded file record
+model File {
+  id          String   @id @default(uuid()) @db.Uuid
+  filename    String   @db.VarChar(500)
+  size        Int
+  type        String   @db.VarChar(100)
+  domain      String   @db.VarChar(255)
+  storagePath String   @map("storage_path") @db.VarChar(1000)
+  url         String?  @db.VarChar(1000)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  createdBy   String?  @map("created_by") @db.Uuid
+
+  templates  Template[]  @relation("TemplateFile")
+  quotations Quotation[] @relation("QuotationFile")
+
+  @@index([domain])
+  @@map("files")
+}
+
+// BOM - Operations
+model Operations {
+  id                String    @id @default(uuid()) @db.Uuid
+  bomId             String    @map("bom_id") @db.Uuid
+  operationName     String    @db.VarChar(255)
+  workCenterId      String    @db.Uuid
+  estimatedDuration Int       @default(0)
+  instructions      String?   @db.VarChar(1000)
+  operationTypeId   String    @map("operation_type_id") @db.Uuid // References master_data.id (OPERATION_TYPE: Independent, etc.)
+  allowedEmployees  String[]  @default([]) @map("allowed_employees") @db.Uuid
+  customElements    Json?     @map("custom_elements") @db.JsonB
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  createdBy         String?   @map("created_by") @db.Uuid
+  updatedBy         String?   @map("updated_by") @db.Uuid
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  bom           Bom                   @relation(fields: [bomId], references: [id])
+  workCenter    WorkCenter            @relation(fields: [workCenterId], references: [id], onDelete: Restrict)
+  operationType MasterData            @relation("OperationType", fields: [operationTypeId], references: [id])
+  dependencies  OperationDependency[] @relation("OperationDependencies") // operations this one depends on
+  dependedOnBy  OperationDependency[] @relation("DependedOnBy") // operations that depend on this one
+  bomOrderEntry BomOperationOrder? // 1:1 ordering entry for this operation within its BOM
+  workOrders    WorkOrder[]           @relation("WorkOrderOperation")
+
+  @@index([bomId])
+  @@index([workCenterId])
+  @@index([operationTypeId])
+  @@map("operations")
+}
+
+// Operation dependencies - join table with FK constraints for referential integrity
+model OperationDependency {
+  id          String   @id @default(uuid()) @db.Uuid
+  operationId String   @map("operation_id") @db.Uuid // The dependent operation (has the dependency)
+  dependsOnId String   @map("depends_on_id") @db.Uuid // The operation it depends on
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  operation Operations @relation("OperationDependencies", fields: [operationId], references: [id], onDelete: Cascade)
+  dependsOn Operations @relation("DependedOnBy", fields: [dependsOnId], references: [id], onDelete: Cascade)
+
+  @@unique([operationId, dependsOnId])
+  @@index([operationId])
+  @@index([dependsOnId])
+  @@map("operation_dependencies")
+}
+
+/// PurchaseOrder - A purchase order sent to a vendor for inventory items
+model PurchaseOrder {
+  id                    String    @id @default(uuid()) @db.Uuid
+  referenceNo           String    @unique @map("reference_no") @db.VarChar(50)
+  vendorId              String?   @map("vendor_id") @db.Uuid
+  vendorName            String?   @map("vendor_name") @db.VarChar(255)
+  organisationId        String?   @map("organisation_id") @db.Uuid // FK → Organisation
+  warehouseId           String?   @map("warehouse_id") @db.Uuid
+  scheduledDeliveryDate DateTime? @map("scheduled_delivery_date") @db.Timestamp(6)
+  status                String    @default("Draft") @map("status") @db.VarChar(50) // Draft, Pending Receipt, Partially Received, Partially Received - Closed, Goods Received
+  customElements        Json?     @map("custom_elements") @db.JsonB
+  integrationBillId       String?   @map("integration_bill_id") @db.VarChar(50)
+  integrationBillStatus   String?   @map("integration_bill_status") @db.VarChar(20) // pending | created | failed
+  integrationReceiptId    String?   @map("integration_receipt_id") @db.VarChar(50)
+  integrationSyncedAt     DateTime? @map("integration_synced_at") @db.Timestamp(6)
+  billCreated             Boolean   @default(false) @map("bill_created")
+  billCreatedAt           DateTime? @map("bill_created_at") @db.Timestamp(6)
+  createdBy             String?   @map("created_by") @db.Uuid
+  updatedBy             String?   @map("updated_by") @db.Uuid
+  sentAt                DateTime? @map("sent_at") @db.Timestamp(6)
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  lines            PurchaseOrderLine[]
+  grns             GoodsReceivedNote[]
+  moComponents     MOComponent[]       @relation("MOComponentPO")
+  organisation_rel Organisation?       @relation(fields: [organisationId], references: [id], onDelete: SetNull)
+
+  @@index([vendorId])
+  @@index([organisationId])
+  @@index([warehouseId])
+  @@index([status])
+  @@map("purchase_orders")
+}
+
+/// PurchaseOrderLine - Individual item lines within a purchase order
+model PurchaseOrderLine {
+  id               String   @id @default(uuid()) @db.Uuid
+  purchaseOrderId  String   @map("purchase_order_id") @db.Uuid
+  itemId           String   @map("item_id") @db.Uuid
+  itemName         String?  @map("item_name") @db.VarChar(255)
+  orderedQuantity  Decimal  @map("ordered_quantity") @db.Decimal(10, 2)
+  receivedQuantity Decimal  @default(0) @map("received_quantity") @db.Decimal(10, 2)
+  unitPrice        Decimal  @map("unit_price") @db.Decimal(18, 4)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  grnLines      GRNLine[]
+
+  @@index([purchaseOrderId])
+  @@index([itemId])
+  @@map("purchase_order_lines")
+}
+
+/// GoodsReceivedNote - Records the receipt of goods against a Purchase Order
+model GoodsReceivedNote {
+  id                    String    @id @default(uuid()) @db.Uuid
+  referenceNo           String    @unique @map("reference_no") @db.VarChar(50)
+  purchaseOrderId       String    @map("purchase_order_id") @db.Uuid
+  vendorId              String    @map("vendor_id") @db.Uuid
+  vendorName            String?   @map("vendor_name") @db.VarChar(255)
+  warehouseId           String    @map("warehouse_id") @db.Uuid
+  warehouseSection      String?   @map("warehouse_section") @db.VarChar(100)
+  warehouseShelf        String?   @map("warehouse_shelf") @db.VarChar(100)
+  scheduledDeliveryDate DateTime? @map("scheduled_delivery_date") @db.Timestamp(6)
+  status                String    @default("Draft") @map("status") @db.VarChar(50) // Draft, Partially Received, Goods Received
+  isPartiallyClosed     Boolean   @default(false) @map("is_partially_closed")
+  note                  String?   @map("note") @db.Text
+  customElements        Json?     @map("custom_elements") @db.JsonB
+  createdBy             String    @map("created_by") @db.Uuid
+  updatedBy             String?   @map("updated_by") @db.Uuid
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  purchaseOrder    PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  warehouse        Warehouse     @relation(fields: [warehouseId], references: [id])
+  organisation_rel Organisation  @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  lines            GRNLine[]
+
+  @@index([purchaseOrderId])
+  @@index([vendorId])
+  @@index([warehouseId])
+  @@index([status])
+  @@map("goods_received_notes")
+}
+
+/// GRNLine - Individual item lines within a GRN
+model GRNLine {
+  id                  String   @id @default(uuid()) @db.Uuid
+  grnId               String   @map("grn_id") @db.Uuid
+  purchaseOrderLineId String   @map("purchase_order_line_id") @db.Uuid
+  itemId              String   @map("item_id") @db.Uuid
+  itemName            String?  @map("item_name") @db.VarChar(255)
+  orderedQuantity     Decimal  @map("ordered_quantity") @db.Decimal(10, 2)
+  receivedQuantity    Decimal  @default(0) @map("received_quantity") @db.Decimal(10, 2)
+  unitPrice           Decimal  @map("unit_price") @db.Decimal(18, 4)
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  grn               GoodsReceivedNote @relation(fields: [grnId], references: [id], onDelete: Cascade)
+  purchaseOrderLine PurchaseOrderLine @relation(fields: [purchaseOrderLineId], references: [id])
+
+  @@index([grnId])
+  @@index([purchaseOrderLineId])
+  @@index([itemId])
+  @@map("grn_lines")
+}
+
+/// Template - Document/report templates with type and status from master data
+model Template {
+  id               String    @id @default(uuid()) @db.Uuid
+  templateName     String    @map("template_name") @db.VarChar(255)
+  templateTypeId   String    @map("template_type_id") @db.Uuid // FK to master_data (TEMPLATE_TYPE)
+  templateCode     String    @map("template_code") @db.VarChar(100)
+  description      String?   @db.Text
+  templateStatusId String    @map("template_status_id") @db.Uuid // FK to master_data (TEMPLATE_STATUS)
+  templateFileId   String?   @map("template_file_id") @db.Uuid
+  customElements   Json?     @map("custom_elements") @db.JsonB
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  createdBy        String?   @map("created_by") @db.Uuid
+  updatedBy        String?   @map("updated_by") @db.Uuid
+  deletedAt        DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  templateType_rel   MasterData @relation("TemplateType", fields: [templateTypeId], references: [id], onDelete: Restrict)
+  templateStatus_rel MasterData @relation("TemplateStatus", fields: [templateStatusId], references: [id], onDelete: Restrict)
+  templateFile_rel   File?      @relation("TemplateFile", fields: [templateFileId], references: [id], onDelete: SetNull)
+
+  @@index([templateTypeId])
+  @@index([templateStatusId])
+  @@index([deletedAt])
+  @@map("templates")
+}
+
+// BomOperationOrder - Stores the user-defined display order for operations within a BOM.
+model BomOperationOrder {
+  id          String   @id @default(uuid()) @db.Uuid
+  bomId       String   @map("bom_id") @db.Uuid
+  operationId String   @unique @map("operation_id") @db.Uuid // 1:1 with Operations
+  position    Int      @default(0)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  bom       Bom        @relation(fields: [bomId], references: [id], onDelete: Cascade)
+  operation Operations @relation(fields: [operationId], references: [id], onDelete: Cascade)
+
+  @@index([bomId])
+  @@map("bom_operation_orders")
+}
+
+/// WorkOrder - One operation execution record per BOM operation, per ManufacturingOrder
+model WorkOrder {
+  id                String    @id @default(uuid()) @db.Uuid
+  moId              String    @map("mo_id") @db.Uuid
+  operationId       String    @map("operation_id") @db.Uuid
+  workCenterId      String    @map("work_center_id") @db.Uuid
+  quantity          Decimal   @db.Decimal(12, 4)
+  unitsDone         Decimal   @default(0) @map("units_done") @db.Decimal(12, 4) // units completed by operator
+  expectedDuration  Int       @map("expected_duration") // minutes (from BOM operation)
+  realDuration      Int?      @map("real_duration") // minutes (sum of time logs)
+  scheduledStart    DateTime? @map("scheduled_start") @db.Timestamp(6)
+  scheduledEnd      DateTime? @map("scheduled_end") @db.Timestamp(6)
+  actualStart       DateTime? @map("actual_start") @db.Timestamp(6)
+  actualEnd         DateTime? @map("actual_end") @db.Timestamp(6)
+  assignedOperators String[]  @default([]) @map("assigned_operators") // user UUIDs (cross-schema)
+  customElements    Json?     @map("custom_elements") @db.JsonB
+  statusId          String    @map("status_id") @db.Uuid // FK → MasterData (WORK_ORDER_STATUS)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  createdBy         String    @map("created_by") @db.Uuid
+  updatedBy         String?   @map("updated_by") @db.Uuid
+
+  mo         ManufacturingOrder @relation(fields: [moId], references: [id], onDelete: Cascade)
+  operation  Operations         @relation("WorkOrderOperation", fields: [operationId], references: [id], onDelete: Restrict)
+  workCenter WorkCenter         @relation("WorkOrderWorkCenter", fields: [workCenterId], references: [id], onDelete: Restrict)
+  status_rel MasterData         @relation("WorkOrderStatus", fields: [statusId], references: [id], onDelete: Restrict)
+  timeLogs   WorkOrderTimeLog[]
+
+  @@index([moId])
+  @@index([operationId])
+  @@index([workCenterId])
+  @@index([statusId])
+  @@map("work_orders")
+}
+
+/// MOComponent - Snapshot of BOM components at MO creation time
+/// Decoupled from BOM so BOM edits don't affect in-flight MOs
+model MOComponent {
+  id              String   @id @default(uuid()) @db.Uuid
+  moId            String   @map("mo_id") @db.Uuid
+  itemId          String?  @map("item_id") @db.Uuid
+  productId       String?  @map("product_id") @db.Uuid
+  componentType   String   @map("component_type") @db.VarChar(10) // 'item' | 'product'
+  requiredQty     Decimal  @map("required_qty") @db.Decimal(12, 4)
+  reservedQty     Decimal  @default(0) @map("reserved_qty") @db.Decimal(12, 4) // qty actually deducted from stock; pending = requiredQty - reservedQty
+  consumedQty     Decimal  @default(0) @map("consumed_qty") @db.Decimal(12, 4)
+  availabilityId  String   @map("availability_id") @db.Uuid // FK → MasterData (MO_COMPONENT_STATUS)
+  purchaseOrderId String?  @map("purchase_order_id") @db.Uuid // FK → PurchaseOrder (optional, linked when PO raised for this component)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  mo               ManufacturingOrder @relation(fields: [moId], references: [id], onDelete: Cascade)
+  item             Item?              @relation("MOComponentItem", fields: [itemId], references: [id], onDelete: SetNull)
+  product          Product?           @relation("MOComponentProduct", fields: [productId], references: [id], onDelete: SetNull)
+  availability_rel MasterData         @relation("MOComponentAvailability", fields: [availabilityId], references: [id], onDelete: Restrict)
+  purchaseOrder    PurchaseOrder?     @relation("MOComponentPO", fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+
+  @@index([moId])
+  @@index([itemId])
+  @@index([productId])
+  @@index([availabilityId])
+  @@index([purchaseOrderId])
+  @@map("mo_components")
+}
+
+/// WorkOrderTimeLog - One row per start/stop pair per operator on a WorkOrder
+model WorkOrderTimeLog {
+  id              String    @id @default(uuid()) @db.Uuid
+  workOrderId     String    @map("work_order_id") @db.Uuid
+  operatorId      String    @map("operator_id") @db.Uuid // public.users.id (cross-schema, no FK)
+  startedAt       DateTime  @map("started_at") @db.Timestamp(6)
+  endedAt         DateTime? @map("ended_at") @db.Timestamp(6)
+  durationMinutes Int?      @map("duration_minutes") // computed on stop
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  @@index([workOrderId])
+  @@index([operatorId])
+  @@map("work_order_time_logs")
+}
+
+/// FinishedGoodsTransfer - Records Send to Warehouse transfers when MO reaches Done
+model FinishedGoodsTransfer {
+  id            String   @id @default(uuid()) @db.Uuid
+  moId          String   @map("mo_id") @db.Uuid
+  warehouseId   String   @map("warehouse_id") @db.Uuid
+  quantity      Decimal  @db.Decimal(12, 4)
+  transferredBy String   @map("transferred_by") @db.Uuid // public.users.id (cross-schema)
+  transferredAt DateTime @map("transferred_at") @db.Timestamp(6)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  mo        ManufacturingOrder @relation(fields: [moId], references: [id], onDelete: Restrict)
+  warehouse Warehouse          @relation("FinishedGoodsWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+
+  @@index([moId])
+  @@index([warehouseId])
+  @@map("finished_goods_transfers")
+}
+
+/// Quotation - Price proposal for a contact (CRM/Sales domain)
+/// Dual-status system:
+/// - stageId: Progress stage shown in frontend stepper (Quotation → Quotation Sent → Sales Order)
+///           Controls workflow process and what actions user can perform
+/// - statusId: Main quotation status shown in grid (Draft, Quotation Sent, Closed Lost, etc.)
+///            Tracks business outcome independent from stage
+///
+/// Important: These two statuses are INDEPENDENT
+/// Example: stageId=QUOTATION_SENT + statusId=CLOSED_LOST means
+///          "We sent it to the customer, but they rejected it"
+model Quotation {
+  id                  String    @id @default(uuid()) @db.Uuid
+  quotationId         String    @unique @map("quotation_id") @db.VarChar(20) // Unique sequential ID (Q00001, Q00002, etc.)
+  salesOrderId        String?   @unique @map("sales_order_id") @db.VarChar(20) // Sales order ID set on confirmation (S00001, S00002, etc.)
+  contactId           String?   @map("contact_id") @db.Uuid
+  organisationId      String?   @map("organisation_id") @db.Uuid // FK → Organisation
+  stageId             String    @map("stage_id") @db.Uuid // STAGE: QUOTATION|QUOTATION_SENT|SALES_ORDER - Frontend stepper progress
+  statusId            String    @map("status_id") @db.Uuid // STATUS: DRAFT|QUOTATION_SENT|CLOSED_LOST|etc - Main status column
+  quoteType           String    @map("quote_type") @db.VarChar(30) // 'System Generated' | 'Manual'
+  expirationDate      DateTime? @map("expiration_date") @db.Date // When quote expires (optional in DRAFT status)
+  paymentTermsId      String?   @map("payment_terms_id") @db.Uuid // FK to MasterData PAYMENT_TERMS (optional in DRAFT status)
+  totalAmount         Decimal   @default(0) @map("total_amount") @db.Decimal(18, 2) // Cached total for performance (sum of line items)
+  taxPercentage       Decimal?  @map("tax_percentage") @db.Decimal(5, 2)  // GST % snapshot at time of save (null = no tax)
+  taxAmount           Decimal?  @map("tax_amount") @db.Decimal(18, 2)     // totalAmount × taxPercentage / 100
+  grandTotal          Decimal   @default(0) @map("grand_total") @db.Decimal(18, 2) // totalAmount + taxAmount
+  quoteFileId         String?   @map("quote_file_id") @db.Uuid // FK to File model: System-generated PDF or manual upload
+  salesPersonId       String    @map("sales_person_id") @db.Uuid // FK to users.id (public schema - cross-tenant reference)
+  sentAt              DateTime? @map("sent_at") @db.Timestamp(6) // Set when transitioned to SENT workflow
+  lostAt              DateTime? @map("lost_at") @db.Timestamp(6) // Set when quotationStatus → CLOSED_LOST
+  salesOrderCreatedAt DateTime? @map("sales_order_created_at") @db.Timestamp(6) // Set when quotation confirmed as Sales Order
+  customElements      Json?     @map("custom_elements") @db.JsonB
+  integrationInvoiceId     String?   @map("integration_invoice_id") @db.VarChar(50)
+  integrationInvoiceStatus String?   @map("integration_invoice_status") @db.VarChar(20) // pending | created | failed
+  integrationSyncedAt      DateTime? @map("integration_synced_at") @db.Timestamp(6)
+  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  createdBy           String    @map("created_by") @db.Uuid
+  updatedBy           String?   @map("updated_by") @db.Uuid
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamp(6) // Soft delete: set when quotation deleted (only in DRAFT workflow)
+
+  contact_rel         Contact?             @relation("QuotationContact", fields: [contactId], references: [id], onDelete: Restrict)
+  organisation_rel    Organisation?        @relation("QuotationOrganisation", fields: [organisationId], references: [id], onDelete: SetNull)
+  stage_rel           MasterData           @relation("QuotationStage", fields: [stageId], references: [id], onDelete: Restrict) // Frontend stepper: QUOTATION|QUOTATION_SENT|SALES_ORDER
+  status_rel          MasterData           @relation("QuotationStatus", fields: [statusId], references: [id], onDelete: Restrict) // Main status: DRAFT|QUOTATION_SENT|CLOSED_LOST|etc
+  paymentTerms_rel    MasterData?          @relation("QuotationPaymentTerms", fields: [paymentTermsId], references: [id], onDelete: Restrict) // Payment terms from master data (optional in DRAFT status)
+  quoteFile_rel       File?                @relation("QuotationFile", fields: [quoteFileId], references: [id], onDelete: SetNull) // Attached PDF or uploaded file
+  manufacturingOrders ManufacturingOrder[] @relation("QuotationMOs") // one MO per manufacturable line item
+  lineItems           QuotationLineItem[]
+
+  @@index([contactId])
+  @@index([organisationId])
+  @@index([stageId])
+  @@index([statusId])
+  @@index([paymentTermsId])
+  @@index([salesPersonId])
+  @@index([salesOrderId])
+  @@index([expirationDate])
+  @@index([salesOrderCreatedAt])
+  @@index([createdAt])
+  @@index([deletedAt])
+  @@map("quotations")
+}
+
+/// QuotationLineItem - Individual product line in a quotation
+model QuotationLineItem {
+  id                   String   @id @default(uuid()) @db.Uuid
+  quotationId          String   @map("quotation_id") @db.Uuid
+  productId            String   @map("product_id") @db.Uuid // FK to Product (manufacturing product definition)
+  quantity             Decimal  @db.Decimal(18, 4)
+  unitPrice            Decimal  @map("unit_price") @db.Decimal(18, 4) // Price from product master at time of quotation
+  salesPrice           Decimal  @map("sales_price") @db.Decimal(18, 4) // Negotiated price for this quotation
+  lineAmount           Decimal  @map("line_amount") @db.Decimal(18, 2) // quantity × salesPrice (stored for performance)
+  sortOrder            Int      @default(0) @map("sort_order")
+  pendingManufacturing Boolean  @default(false) @map("pending_manufacturing") // True when confirmed stock was insufficient — awaiting MO or procurement
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  quotation_rel Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  product_rel   Product   @relation("QuotationLineItem", fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([quotationId])
+  @@index([productId])
+  @@map("quotation_line_items")
+}
+
+/// Integration - stores connection configurations for external systems (Acumatica, MaXXlink, MYOB, etc.)
+model Integration {
+  id               String    @id @default(uuid()) @db.Uuid
+  integrationName  String    @map("integration_name") @db.VarChar(255)
+  integrationType  String    @map("integration_type") @db.VarChar(100) // 'Acumatica' | 'MaXXlink' | 'MYOB'
+  companyName      String?   @map("company_name") @db.VarChar(255)
+  baseUrl          String    @map("base_url") @db.VarChar(500)
+  apiKey           String?   @map("api_key") @db.VarChar(500)
+  tenantId         String?   @map("tenant_id") @db.VarChar(255)
+  username         String?   @db.VarChar(255)
+  password         String?   @db.VarChar(500)          // encrypted at rest
+  connectionStatusId String    @map("connection_status_id") @db.Uuid
+  lastTestedAt       DateTime? @map("last_tested_at") @db.Timestamp(6)
+  deactivatedAt      DateTime? @map("deactivated_at") @db.Timestamp(6) // set when connectionStatus flips to Inactive; cleared on reactivation. Basis for reactivation-staleness detection (compare against integration_entity_sync.syncedAt).
+  connectionBrokenAt     DateTime? @map("connection_broken_at") @db.Timestamp(6) // set when a live signal from the external system (e.g. revoked OAuth grant, 403) proves the connection is dead; cleared on next successful auth
+  connectionBrokenReason String?   @map("connection_broken_reason") @db.VarChar(500)
+  sessionCookie      String?   @map("session_cookie") @db.Text            // active Acumatica session cookie; maintained by AcumaticaAuthCronService
+  cookieExpiresAt    DateTime? @map("cookie_expires_at") @db.Timestamp(6) // parsed from Set-Cookie expires; used to schedule next refresh
+  sessionLastUsedAt  DateTime? @map("session_last_used_at") @db.Timestamp(6) // stamped on every authenticated Acumatica request; drives idle logout in the refresh cron
+  externalFieldSchema Json?    @map("external_field_schema") @db.JsonB     // per-entity field names probed from the external system; populated on save. Shape: ExternalFieldSchema
+  createdBy          String?   @map("created_by") @db.Uuid
+  updatedBy          String?   @map("updated_by") @db.Uuid
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  connectionStatus_rel MasterData @relation("IntegrationConnectionStatus", fields: [connectionStatusId], references: [id], onDelete: Restrict)
+  templateMappings     TemplateMapping[]
+
+  @@index([integrationType])
+  @@index([connectionStatusId])
+  // NOTE: partial unique indexes enforced at the DB level (see migration
+  // `integration_uniqueness_guard`) — not expressible in Prisma's schema DSL, so not declared here:
+  //   - lower(integration_name) WHERE deleted_at IS NULL
+  //   - lower(regexp_replace(base_url, '/+$', '')), lower(username) WHERE deleted_at IS NULL
+  // Do not run `prisma db push` / `migrate reset` against this model without accounting for that —
+  // those reconcile against schema.prisma directly and would silently drop these indexes.
+  @@map("integrations")
+}
+
+/// ExternalEntityMapping - tracks external system IDs mapped to MRP entity IDs
+/// Used by integration endpoints to support idempotent upserts from external systems
+model ExternalEntityMapping {
+  id         String   @id @default(uuid()) @db.Uuid
+  entityType String   @map("entity_type") @db.VarChar(50) // 'item' | 'product' | 'bom'
+  entityId   String   @map("entity_id") @db.Uuid
+  source     String   @db.VarChar(100) // 'maxxlink' | 'epicor' | 'generic' etc
+  externalId String   @map("external_id") @db.VarChar(500) // UUID/ID in the external system
+  metadata   Json?    @db.JsonB // sync metadata (revision, timestamps, etc.)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@unique([source, entityType, externalId])
+  @@index([entityType, entityId, source])
+  @@map("external_entity_mappings")
+}
+
+/// IntegrationJob - tracks async bulk sync jobs dispatched to Temporal
+model IntegrationJob {
+  id           String    @id @default(uuid()) @db.Uuid
+  workflowId   String    @unique @map("workflow_id") @db.VarChar(255)
+  entityType   String    @map("entity_type") @db.VarChar(50) // 'item' | 'product'
+  source       String    @db.VarChar(100) // 'maxxlink' | 'epicor' | 'generic'
+  status       String    @default("queued") @db.VarChar(50) // 'queued' | 'running' | 'completed' | 'failed'
+  totalCount   Int       @map("total_count")
+  successCount Int       @default(0) @map("success_count")
+  failureCount Int       @default(0) @map("failure_count")
+  results      Json?     @db.JsonB // array of UpsertItemResultDto / UpsertProductResultDto
+  error        String?   @db.Text
+  errorFileUrl String?   @map("error_file_url") @db.Text // SAS URL of the batch sync error report (xlsx)
+  createdBy    String    @map("created_by") @db.VarChar(50)
+  startedAt    DateTime  @default(now()) @map("started_at") @db.Timestamp(6)
+  completedAt  DateTime? @map("completed_at") @db.Timestamp(6)
+
+  @@index([workflowId])
+  @@index([status])
+  @@index([entityType, source])
+  @@map("integration_jobs")
+}
+
+/// IntegrationEntitySync - per-entity, per-integration sync state. Generic + multi-integration ready
+/// (one row per integration × entity), so an entity can sync to several integrations independently.
+/// status: pending | synced | failed_transient | failed_config | failed_data (see BATCH_ENTITY_SYNC.md §6.7).
+model IntegrationEntitySync {
+  id             String    @id @default(uuid()) @db.Uuid
+  integrationId  String    @map("integration_id") @db.Uuid
+  entityType     String    @map("entity_type") @db.VarChar(50) // 'item' | 'product'
+  entityId       String    @map("entity_id") @db.Uuid
+  externalId     String?   @map("external_id") @db.VarChar(100) // e.g. Acumatica InventoryID, set on success
+  status         String    @default("pending") @db.VarChar(30)
+  lastError      String?   @map("last_error") @db.Text
+  lastBatchJobId String?   @map("last_batch_job_id") @db.VarChar(255) // batch job that last touched it
+  syncedAt       DateTime? @map("synced_at") @db.Timestamp(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@unique([integrationId, entityType, entityId])
+  @@index([status])
+  @@index([entityType, entityId])
+  @@map("integration_entity_sync")
+}
+
+/// AcumaticaRetryJob - stores failed Acumatica sync operations for exponential-backoff retry (max 3 attempts)
+model AcumaticaRetryJob {
+  id            String    @id @default(uuid()) @db.Uuid
+  integrationId String    @map("integration_id") @db.Uuid
+  operationType String    @map("operation_type") @db.VarChar(50) // invoice | bill | item | customer | vendor
+  entityId      String    @map("entity_id") @db.Uuid
+  payload       Json      @db.JsonB
+  retryCount    Int       @default(0) @map("retry_count")
+  nextRetryAt   DateTime  @map("next_retry_at") @db.Timestamp(6)
+  lastError     String?   @map("last_error") @db.Text
+  status        String    @default("pending") @db.VarChar(20) // pending | failed
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@index([status, nextRetryAt])
+  @@index([integrationId])
+  @@map("acumatica_retry_jobs")
+}
+
+/// TemplateMapping - named, user-defined mapping of MRP fields to an external integration's fields.
+/// Integration-generic: removes hardcoded payload values from the sync builders.
+model TemplateMapping {
+  id            String    @id @default(uuid()) @db.Uuid
+  name          String    @db.VarChar(255)
+  integrationId String    @map("integration_id") @db.Uuid
+  statusId      String    @map("status_id") @db.Uuid // MasterData STATUS: Active/Inactive
+  createdBy     String?   @map("created_by") @db.Uuid
+  updatedBy     String?   @map("updated_by") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+  deletedAt     DateTime? @map("deleted_at") @db.Timestamp(6)
+
+  integration Integration           @relation(fields: [integrationId], references: [id], onDelete: Restrict)
+  status_rel  MasterData            @relation("TemplateMappingStatus", fields: [statusId], references: [id], onDelete: Restrict)
+  forms       TemplateMappingForm[]
+
+  @@index([integrationId])
+  @@index([statusId])
+  @@map("template_mappings")
+}
+
+/// TemplateMappingForm - one MRP form (e.g. Inventory Item) within a template mapping.
+/// entityKey is the generic MRP entity ('item' | 'product' | 'vendor' | 'organisation-customer' |
+/// 'contact') resolved from formCode - it, not formCode, is the unique mapping target: a form code
+/// can bind to more than one entity key (e.g. ORGANISATION_FORM binds to both 'vendor' and
+/// 'organisation-customer' - Vendor and Customer are independent Acumatica targets sharing the same
+/// MRP source fields), so uniqueness must be on entityKey, not formCode.
+model TemplateMappingForm {
+  id                String   @id @default(uuid()) @db.Uuid
+  templateMappingId String   @map("template_mapping_id") @db.Uuid
+  formCode          String   @map("form_code") @db.VarChar(100)
+  entityKey         String   @map("entity_key") @db.VarChar(50)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  templateMapping TemplateMapping      @relation(fields: [templateMappingId], references: [id], onDelete: Cascade)
+  rows            TemplateMappingRow[]
+
+  @@unique([templateMappingId, entityKey])
+  @@index([entityKey])
+  @@map("template_mapping_forms")
+}
+
+/// TemplateMappingRow - one MRP field -> external field pair. Maps fields only, never values.
+model TemplateMappingRow {
+  id            String  @id @default(uuid()) @db.Uuid
+  formId        String  @map("form_id") @db.Uuid
+  mrpField      String  @map("mrp_field") @db.VarChar(255) // "partNumber" | "customElements.CurrencyID"
+  externalField String  @map("external_field") @db.VarChar(255) // "InventoryID" | "CurrencyID"
+  isRequired    Boolean @default(false) @map("is_required")
+
+  form TemplateMappingForm @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  // One external field is written by exactly one MRP field, but an MRP field MAY map to
+  // multiple external fields (one-to-many). So the external field is unique per form, not the MRP field.
+  @@unique([formId, externalField])
+  @@map("template_mapping_rows")
+}
+
+
+model BulkImportJob {
+  id           String   @id @default(uuid()) @db.Uuid
+  entityType   String   @map("entity_type") // e.g. 'ORGANISATION_ITEMS'
+  status       String   @default("PENDING") // PENDING | PROCESSING | DONE | FAILED
+  totalRows    Int      @default(0) @map("total_rows")
+  processed    Int      @default(0)
+  succeeded    Int      @default(0)
+  failed       Int      @default(0)
+  inputFileUrl String   @map("input_file_url") @db.Text
+  errorFileUrl String?  @map("error_file_url") @db.Text
+  requestedBy  String   @map("requested_by") // user email
+  metadata     Json?    @db.JsonB // extra context e.g. { organisationId }
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@index([status])
+  @@index([requestedBy])
+  @@map("bulk_import_jobs")
+}
+
+model SchemaPool {
+  id           String    @id @default(uuid()) @db.Uuid
+  schemaName   String    @unique @map("schema_name") @db.VarChar(63)
+  /// 'unallocated' | 'allocating' | 'allocated'
+  status       String    @default("unallocated") @db.VarChar(20)
+  tenantId     String?   @map("tenant_id") @db.Uuid
+  isPreSeeded  Boolean   @default(false) @map("is_pre_seeded")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  allocatedAt  DateTime? @map("allocated_at") @db.Timestamp(6)
+
+  @@index([status])
+  @@map("schema_pool")
+}
+
+// ============================================
+// POLICY DOCUMENTS (public schema — CI Admin managed)
+// ============================================
+
+model PolicyDocument {
+  id          String   @id @default(uuid()) @db.Uuid
+  /// EULA | PRIVACY_POLICY | TERMS_CONDITIONS
+  category    String   @db.VarChar(50)
+  name        String   @db.VarChar(500)
+  description String?  @db.Text
+  version     Int      // auto-incremented per category in service layer
+  storagePath String   @map("storage_path") @db.VarChar(1000)
+  fileUrl     String   @map("file_url") @db.VarChar(1000)
+  isCurrent   Boolean  @default(false) @map("is_current") // only one doc per category is current
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+  createdBy   String?  @map("created_by") @db.Uuid // references public.users.id
+
+  @@index([category])
+  @@index([category, isCurrent])
+  @@map("policy_documents")
+}
