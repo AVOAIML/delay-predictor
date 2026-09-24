@@ -23,6 +23,17 @@ MO references contain ``/`` (``WH/MO/00142``), which would read as a directory
 separator. ``job_key`` makes a readable, filename-safe form and appends a short
 hash of the exact reference, so two references that sanitize to the same text
 can never share a file. The exact reference is always kept inside the record.
+
+WHICH STORE — ``AZURE_STORAGE_CONTAINER``
+-----------------------------------------
+``local`` writes to the MinIO lake; any other value is the Azure container
+(default ``dev``). The choice is made in ``Settings.container_lake_uri`` /
+``container_lake_options`` — nothing in this package branches on it — and the
+layout below the root is identical, so a path verified against MinIO is the
+path Azure will get::
+
+    local : s3://maxxflow-lake/demo/m3_production_delay/bronze/...
+    dev   : abfss://dev@<account>.dfs.core.windows.net/maxxflow-lake/demo/m3_production_delay/bronze/...
 """
 
 from __future__ import annotations
@@ -60,6 +71,19 @@ NEGATIVE_INFINITY = "-inf"
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
 _KEY_HASH_CHARS = 10
+
+
+def get_snapshot_lake(settings: Any | None = None):
+    """The tenant artifact store selected by AZURE_STORAGE_CONTAINER.
+
+    Raises ``ValueError`` when Azure is selected but not configured; callers
+    that must not fail (the snapshot writer) catch it and log it.
+    """
+    from maxxflow_core.settings import get_settings
+    from maxxflow_features.lake import LakeIO
+
+    s = settings or get_settings()
+    return LakeIO.at(s.container_lake_uri, s.container_lake_options)
 
 
 def job_key(job_id: str) -> str:

@@ -13,6 +13,7 @@ ingest, which is exactly what bronze exists to avoid.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from typing import Any
 
 import pandas as pd
@@ -20,9 +21,29 @@ import pandas as pd
 from maxxflow_core.settings import Settings, get_settings
 
 
+@dataclass(frozen=True)
+class _Root:
+    """The two settings LakeIO reads, for a lake not rooted at LAKE_URI."""
+
+    lake_uri: str
+    lake_storage_options: dict = field(default_factory=dict)
+
+
 class LakeIO:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
+
+    @classmethod
+    def at(cls, uri: str, storage_options: dict | None = None) -> "LakeIO":
+        """A lake rooted at an explicit URI instead of LAKE_URI — for a store
+        another setting selects (e.g. ``Settings.container_lake_uri``). Same
+        layout below the root, so the same paths land in either store."""
+        return cls(_Root(uri, dict(storage_options or {})))  # type: ignore[arg-type]
+
+    @property
+    def root(self) -> str:
+        """The lake's root URI. Never carries credentials — those live in options."""
+        return self.settings.lake_uri.rstrip("/")
 
     def _uri(self, layer: str, name: str, *, tenant: str, module: str, ext: str = "parquet") -> str:
         base = self.settings.lake_uri.rstrip("/")

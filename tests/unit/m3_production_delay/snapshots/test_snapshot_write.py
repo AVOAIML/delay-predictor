@@ -166,9 +166,9 @@ def test_an_unreachable_lake_at_construction_is_reported_never_raised(
     job, insight, monkeypatch
 ):
     def explode():
-        raise RuntimeError("bad LAKE_URI")
+        raise ValueError("AZURE_STORAGE_CONTAINER='dev' selects Azure storage, but no account")
 
-    monkeypatch.setattr("maxxflow_features.lake.get_lake", explode)
+    monkeypatch.setattr("m3_production_delay.snapshots.snapshot.get_snapshot_lake", explode)
     report = write_snapshots([job], [insight], tenant="demo", risk_weights=WEIGHTS,
                              threshold=THRESHOLD)
     assert (report.written, report.failed) == (0, 1)
