@@ -10,8 +10,8 @@ export function MoHeader({ order }: { order: ManufacturingOrder }) {
             <BackIcon />
           </button>
           <div>
-            <h1>Create Manufacturing Order</h1>
-            <p className="mo-header__subtitle">Create a new manufacturing order</p>
+            <h1>{order.reference}</h1>
+            <p className="mo-header__subtitle">{order.product}</p>
           </div>
         </div>
         <div className="mo-header__actions">

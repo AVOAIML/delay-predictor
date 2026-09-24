@@ -65,16 +65,58 @@ export function OrderForm({ order }: { order: ManufacturingOrder }) {
           </tbody>
         </table>
       ) : (
-        <p className="muted">No work orders generated yet — plan this order to schedule them.</p>
+        order.workOrders && order.workOrders.length > 0 ? (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Operation</th>
+                <th>Work Center</th>
+                <th className="table__num">Quantity</th>
+                <th className="table__num">Estimated Duration</th>
+                <th className="table__num">Actual Duration</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {order.workOrders.map((workOrder) => (
+                <tr key={workOrder.id}>
+                  <td>{workOrder.operationName}</td>
+                  <td>{workOrder.workCenter ?? "Work Center"}</td>
+                  <td className="table__num">
+                    {workOrder.unitsDone}/{workOrder.quantity}
+                  </td>
+                  <td className="table__num">{formatMinutes(workOrder.expectedDurationMinutes)}</td>
+                  <td className="table__num">{formatMinutes(workOrder.actualDurationMinutes)}</td>
+                  <td><span className={statusClass(workOrder.status)}>{workOrder.status}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="muted">No work orders generated yet — plan this order to schedule them.</p>
+        )
       )}
     </div>
   );
+}
+
+function formatMinutes(value: number | null): string {
+  if (value === null) return "—";
+  if (value % 60 === 0) return `${value / 60} hrs`;
+  return `${value} min`;
 }
 
 function availabilityClass(availability: string): string {
   if (availability === "Available") return "pill--green";
   if (availability === "Short") return "pill--amber";
   return "pill--red";
+}
+
+function statusClass(status: string): string {
+  const normalized = status.toLowerCase();
+  return normalized.includes("progress")
+    ? "work-order-status work-order-status--progress"
+    : "work-order-status";
 }
 
 function Field({ label, required, children }: { label: string; required?: boolean; children: ReactNode }) {

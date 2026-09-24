@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { SCENARIOS } from "./data/scenarios";
-import { fetchDelayInsight, usingLiveApi } from "./api";
+import { fetchManufacturingOrders, usingLiveApi } from "./api";
 import type { ManufacturingOrder, ValidatedInsight } from "./types";
 import { TopBar } from "./components/TopBar";
 import { MoHeader } from "./components/MoHeader";
@@ -14,42 +14,43 @@ import { WeightsAdminPanel } from "./components/WeightsAdminPanel";
 type View = "mo" | "create-mo" | "weights";
 
 export default function App() {
-  // Seeded with the three bundled fixtures; a successful Create MO submit
-  // appends the real, freshly-scored job to this same list.
-  const [orders, setOrders] = useState<ManufacturingOrder[]>(SCENARIOS);
-  const [reference, setReference] = useState(SCENARIOS[0].reference);
+  // Live mode starts empty and replaces the whole selector/page model with
+  // tenant-scoped database rows. Fixtures exist only for standalone mode.
+  const [orders, setOrders] = useState<ManufacturingOrder[]>(usingLiveApi ? [] : SCENARIOS);
+  const [reference, setReference] = useState(usingLiveApi ? "" : SCENARIOS[0].reference);
   const [view, setView] = useState<View>("mo");
-  const order = orders.find((o) => o.reference === reference) ?? orders[0];
-
-  // Re-fetches through api.ts on every scenario switch, exactly like the
-  // real MO page would call GET /api/{tenant}/delay-insights?job=<ref> — in
-  // mock mode this just resolves the bundled fixture, but the data path is
-  // the same one a live backend would take.
-  const [insight, setInsight] = useState<ValidatedInsight>(order.insight);
-  const [loading, setLoading] = useState(false);
+  const [loadingOrders, setLoadingOrders] = useState(usingLiveApi);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const order = orders.find((o) => o.reference === reference) ?? orders[0] ?? null;
 
   useEffect(() => {
+    if (!usingLiveApi) return;
     let cancelled = false;
-    setLoading(true);
-    fetchDelayInsight(reference)
+    setLoadingOrders(true);
+    setLoadError(null);
+    fetchManufacturingOrders()
       .then((result) => {
-        if (!cancelled) setInsight(result);
+        if (cancelled) return;
+        setOrders(result);
+        setReference((current) =>
+          result.some((candidate) => candidate.reference === current)
+            ? current
+            : result[0]?.reference ?? "",
+        );
       })
-      .catch(() => {
-        if (!cancelled) setInsight(order.insight);
+      .catch((error) => {
+        if (!cancelled) setLoadError(error instanceof Error ? error.message : String(error));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) setLoadingOrders(false);
       });
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reference]);
+  }, []);
 
   const handleCreated = (newOrder: ManufacturingOrder) => {
-    setOrders((prev) => [...prev, newOrder]);
-    setInsight(newOrder.insight);
+    setOrders((prev) => [newOrder, ...prev.filter((row) => row.reference !== newOrder.reference)]);
     setReference(newOrder.reference);
     setView("mo");
   };
@@ -62,7 +63,6 @@ export default function App() {
     setOrders((prev) =>
       prev.map((o) => (o.reference === jobReference ? { ...o, insight: newInsight } : o)),
     );
-    if (jobReference === reference) setInsight(newInsight);
   };
 
   return (
@@ -95,16 +95,26 @@ export default function App() {
             />
           )}
           {view === "mo" && (
-            <>
-              <MoHeader order={order} />
-              <OrderForm order={order} />
-            </>
+            order ? (
+              <>
+                <MoHeader order={order} />
+                <OrderForm key={order.reference} order={order} />
+              </>
+            ) : (
+              <div className="card">
+                <h2>{loadingOrders ? "Loading manufacturing orders…" : "No manufacturing orders"}</h2>
+                {loadError && <p className="create-mo__error">{loadError}</p>}
+                {!loadingOrders && !loadError && (
+                  <p className="muted">No active manufacturing orders were found for this tenant.</p>
+                )}
+              </div>
+            )
           )}
         </div>
-        {view === "mo" && (
+        {view === "mo" && order && (
           <aside className="layout__side">
-            <DelayRiskCard insight={loading ? order.insight : insight} />
-            <MaterialOverrunCard components={(loading ? order.insight : insight).material_overrun} />
+            <DelayRiskCard insight={order.insight} />
+            <MaterialOverrunCard components={order.insight?.material_overrun ?? []} />
             <ActivityTimeline entries={order.activity} />
           </aside>
         )}

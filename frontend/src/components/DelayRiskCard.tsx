@@ -1,7 +1,17 @@
 import type { ValidatedInsight } from "../types";
 import { percentOfThreshold, riskBand, riskBandClass } from "../riskBand";
 
-export function DelayRiskCard({ insight }: { insight: ValidatedInsight }) {
+export function DelayRiskCard({ insight }: { insight: ValidatedInsight | null }) {
+  if (!insight) {
+    return (
+      <div className="card risk-card">
+        <div className="risk-card__why">
+          <h3>Delay risk not scored</h3>
+          <p className="muted">This manufacturing order has no published M3 insight yet.</p>
+        </div>
+      </div>
+    );
+  }
   const hours = insight.overrun_hours ?? 0;
   const percent = percentOfThreshold(insight.risk_score, insight.delay_threshold);
   const band = riskBand(insight.is_delayed, percent);

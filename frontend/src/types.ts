@@ -13,7 +13,8 @@ export type SignalKey =
   | "time_overrun_ratio"
   | "operator_pace_ratio"
   | "material_shortfall_ratio"
-  | "supplier_reliability";
+  | "supplier_reliability"
+  | "critical_path_cascade_ratio";
 
 export type InsightStatus =
   | "approved"
@@ -75,6 +76,22 @@ export interface ComponentRow {
   product: string;
   availability: "Available" | "Short" | "Not Available";
   toConsume: number;
+  availableQuantity?: number;
+}
+
+export interface WorkOrderRow {
+  id: string;
+  operationName: string;
+  workCenter?: string;
+  status: string;
+  quantity: number;
+  unitsDone: number;
+  expectedDurationMinutes: number;
+  actualDurationMinutes: number | null;
+  scheduledStart: string | null;
+  scheduledEnd: string | null;
+  actualStart: string | null;
+  actualEnd: string | null;
 }
 
 export interface ActivityEntry {
@@ -94,8 +111,9 @@ export interface ManufacturingOrder {
   scheduledDate: string;
   stage: MoStage;
   components: ComponentRow[];
+  workOrders?: WorkOrderRow[];
   activity: ActivityEntry[];
-  insight: ValidatedInsight;
+  insight: ValidatedInsight | null;
 }
 
 // --- the "Create MO" flow: POST /api/{tenant}/demo-manufacturing-orders
@@ -109,19 +127,69 @@ export interface CreateMoComponentInput {
 }
 
 export interface CreateMoInput {
-  product: string;
+  product_id: string;
+  bom_id: string;
   quantity: number;
-  operation_name: string;
-  expected_duration_hours: number;
-  actual_duration_hours: number;
   threshold: number;
   components: CreateMoComponentInput[];
+  work_orders: CreateWorkOrderInput[];
+}
+
+export interface CreateWorkOrderInput {
+  operation_id: string | null;
+  work_center_id: string | null;
+  work_center_name: string;
+  name: string;
+  expected_duration_hours: number;
+  actual_duration_hours: number | null;
+  units_done: number;
+  depends_on_index: number | null;
+}
+
+export interface BomComponentOption extends CreateMoComponentInput {
+  item_id: string | null;
+}
+
+export interface BomOperationOption {
+  operation_id: string;
+  name: string;
+  work_center_id: string | null;
+  work_center_name: string;
+  expected_duration_hours: number;
+  depends_on_operation_id: string | null;
+}
+
+export interface BomOption {
+  id: string;
+  code: string;
+  name: string;
+  components: BomComponentOption[];
+  operations: BomOperationOption[];
+}
+
+export interface ProductOption {
+  id: string;
+  sku: string;
+  name: string;
+  boms: BomOption[];
+}
+
+export interface ManufacturingOrderOptionsResponse {
+  tenant: string;
+  products: ProductOption[];
 }
 
 export interface CreateMoResponse {
   tenant: string;
   job_id: string;
   insight: ValidatedInsight;
+  order: ManufacturingOrder;
+}
+
+export interface ManufacturingOrdersResponse {
+  tenant: string;
+  count: number;
+  orders: ManufacturingOrder[];
 }
 
 // --- the "Admin: Configure Weights" flow: POST /api/{tenant}/demo-weights

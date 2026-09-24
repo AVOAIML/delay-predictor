@@ -544,6 +544,79 @@ def test_calculate_delay_elements_end_to_end_shape_and_values():
     assert op_b["operator_pace_ratio"] == pytest.approx(500 / 400)
 
 
+def test_critical_predecessor_overrun_increases_and_flags_not_started_dependent():
+    job_rollup = {
+        "job_id": "JOB-CASCADE",
+        "operations": [
+            make_op(
+                operation_id="predecessor",
+                operation_name="Cutting",
+                expected_duration_minutes=240,
+                actual_duration_minutes=78,
+                current_done_quantity=25,
+                job_quantity=100,
+            ),
+            make_op(
+                operation_id="dependent",
+                operation_name="Assembly",
+                depends_on_operation_ids=["predecessor"],
+                expected_duration_minutes=120,
+                actual_duration_minutes=None,
+                current_done_quantity=0,
+                job_quantity=100,
+                operators=[],
+                components=[],
+                status="PENDING",
+            ),
+        ],
+    }
+
+    scored = calculate_delay_elements_for_jobs([job_rollup])[0]
+    dependent = scored["operations"][1]
+
+    assert dependent["is_on_critical_path"] is True
+    assert dependent["critical_predecessor_operation_ids"] == ["predecessor"]
+    assert dependent["critical_path_cascade_ratio"] == pytest.approx(1.30)
+    assert dependent["cascade_source_operation_ids"] == ["predecessor"]
+    assert dependent["composite_risk_score"] > dependent["base_composite_risk_score"]
+    assert dependent["composite_risk_score"] == pytest.approx(1.30)
+    assert dependent["is_delayed"] is True
+
+
+def test_noncritical_predecessor_overrun_does_not_raise_dependent_risk():
+    job_rollup = {
+        "job_id": "JOB-NONCRITICAL",
+        "operations": [
+            make_op(
+                operation_id="long-root", expected_duration_minutes=300,
+                actual_duration_minutes=None, current_done_quantity=0,
+            ),
+            make_op(
+                operation_id="long-end", expected_duration_minutes=100,
+                depends_on_operation_ids=["long-root"], actual_duration_minutes=None,
+                current_done_quantity=0,
+            ),
+            make_op(
+                operation_id="short-overrun", expected_duration_minutes=20,
+                actual_duration_minutes=30, current_done_quantity=50, job_quantity=100,
+            ),
+            make_op(
+                operation_id="short-dependent", expected_duration_minutes=20,
+                depends_on_operation_ids=["short-overrun"], actual_duration_minutes=None,
+                current_done_quantity=0,
+            ),
+        ],
+    }
+
+    scored = calculate_delay_elements_for_jobs([job_rollup])[0]
+    dependent = scored["operations"][3]
+
+    assert dependent["predecessor_time_overrun_ratio"] == pytest.approx(3.0)
+    assert dependent["is_on_critical_path"] is False
+    assert dependent["critical_path_cascade_ratio"] is None
+    assert dependent["composite_risk_score"] == dependent["base_composite_risk_score"]
+
+
 def test_calculate_delay_elements_does_not_mutate_input():
     job_rollup = _rollup_with_two_dependent_operations()
     import copy

@@ -177,7 +177,7 @@ select {
 }
 
 .layout--single {
-  grid-template-columns: minmax(0, 900px);
+  grid-template-columns: minmax(0, 1200px);
   justify-content: center;
 }
 
@@ -307,6 +307,122 @@ select {
   flex-direction: column;
   gap: 8px;
   margin-bottom: 18px;
+}
+
+.create-mo__tabs {
+  margin-top: 22px;
+}
+
+.create-mo__work-orders {
+  margin-bottom: 18px;
+}
+
+.create-mo__table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.work-orders-table {
+  min-width: 1080px;
+}
+
+.work-orders-table th {
+  background: #f8f8f9;
+  padding: 13px 10px;
+  white-space: nowrap;
+}
+
+.work-orders-table td {
+  padding: 8px 10px;
+  vertical-align: middle;
+}
+
+.work-orders-table input,
+.work-orders-table select {
+  width: 100%;
+  min-width: 112px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  padding: 7px 8px;
+  color: var(--text);
+}
+
+.work-orders-table input:hover,
+.work-orders-table input:focus,
+.work-orders-table select:hover,
+.work-orders-table select:focus {
+  border-color: var(--border);
+  background: #fff;
+  outline: none;
+}
+
+.work-orders-table input[readonly],
+.work-orders-table select:disabled {
+  color: var(--text);
+  opacity: 1;
+  cursor: default;
+}
+
+.work-orders-table td:nth-child(1) { min-width: 180px; }
+.work-orders-table td:nth-child(2) { min-width: 160px; }
+.work-orders-table td:nth-child(3) { min-width: 130px; }
+.work-orders-table td:nth-child(6) { min-width: 150px; }
+
+.work-orders-table__total {
+  color: var(--muted);
+  white-space: nowrap;
+  margin-left: 4px;
+}
+
+.duration-input {
+  display: flex;
+  align-items: center;
+  min-width: 120px;
+}
+
+.duration-input span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.work-order-status {
+  display: inline-block;
+  border: 1px solid #4f7cff;
+  border-radius: 6px;
+  padding: 3px 9px;
+  color: #2f65e5;
+  background: #f5f8ff;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.work-order-status--progress {
+  border-color: #86d5a2;
+  color: #18794e;
+  background: #edfdf3;
+}
+
+.work-order-start {
+  width: 38px;
+  height: 38px;
+  border: 0;
+  border-radius: 8px;
+  background: #20c96b;
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+
+.work-order-start:hover {
+  background: #16ad59;
+}
+
+.create-mo__add {
+  align-self: flex-start;
+  margin-top: 10px;
 }
 
 .create-mo__component-row {

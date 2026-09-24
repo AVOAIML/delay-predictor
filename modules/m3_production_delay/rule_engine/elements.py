@@ -28,11 +28,20 @@ Each element, and exactly how it reads the rollup shape:
     unit is finished).
 
   predecessor_time_overrun_ratio (per operation)
-    = MAX(time_overrun_ratio of each critical-path predecessor)
+    = MAX(time_overrun_ratio of each direct predecessor)
     Only meaningful for a DEPENDENT operation - i.e. one with at least one
     entry in `depends_on_operation_ids`. None for an operation with no
     predecessors (independent), and None if every predecessor's own
-    time_overrun_ratio is itself None (nothing to take a max of).
+    time_overrun_ratio is itself None (nothing to take a max of). This raw
+    value is context only; `critical_path_cascade_ratio` below is the value
+    allowed to change risk.
+
+  critical_path_cascade_ratio (per operation)
+    = worst upstream time_overrun_ratio above 1.20 which reaches this
+    operation through zero-float Critical Path Method edges. It is None for
+    independent operations and non-critical dependency branches. The final
+    score adds the inherited excess above 1.0 to its base score, with the
+    inherited ratio as a floor when the dependent has no local evidence.
 
   operator_pace_ratio (per operation)
     = AVG over the operation's assigned operators of R(op)
@@ -74,6 +83,11 @@ from typing import Any
 import pandas as pd
 
 from maxxflow_core.errors import get_logger
+from m3_production_delay.rule_engine.critical_path import (
+    analyze_critical_path,
+    apply_cascade_risk,
+    cascading_overruns,
+)
 
 
 log = get_logger("m3_production_delay.rule_engine.elements")
@@ -367,9 +381,11 @@ def _calculate_delay_elements_for_one_job(
 ) -> dict:
     """Returns a NEW dict shaped exactly like `job_rollup` (from
     `build_job_rollups()`), with the elements attached:
-      - time_overrun_ratio, predecessor_time_overrun_ratio, operator_pace_ratio,
-        material_shortfall_ratio, predicted_overrun_hours, composite_risk_score,
-        is_delayed on each operation
+      - time_overrun_ratio, predecessor_time_overrun_ratio,
+        critical_path_cascade_ratio, critical-path metadata,
+        operator_pace_ratio, material_shortfall_ratio,
+        predicted_overrun_hours, base_composite_risk_score,
+        composite_risk_score and is_delayed on each operation
       - vendor_lead_time_ratio on each component's `vendor` dict
     Does not mutate the input. Predecessor lookups are scoped to THIS job's
     own `operations` list only - see `calculate_delay_elements_for_jobs`.
@@ -382,6 +398,16 @@ def _calculate_delay_elements_for_one_job(
     time_overrun_ratio_by_operation_id = {
         op["operation_id"]: time_overrun_ratio(op) for op in ops
     }
+    critical_path = analyze_critical_path(ops)
+    cascade_by_operation_id = cascading_overruns(
+        critical_path, time_overrun_ratio_by_operation_id,
+    )
+    if not critical_path.valid:
+        log.warning(
+            "m3_critical_path job_id=%s valid=False reason=%s",
+            job_rollup.get("job_id"),
+            critical_path.error,
+        )
 
     enriched_ops = []
     for op in ops:
@@ -404,8 +430,12 @@ def _calculate_delay_elements_for_one_job(
             "material_shortfall_ratio": op_material_shortfall,
             "supplier_reliability": op_supplier_reliability,
         }
-        op_risk_score = composite_risk_score(risk_values, risk_weights)
+        base_risk_score = composite_risk_score(risk_values, risk_weights)
+        cascade = cascade_by_operation_id.get(op["operation_id"])
+        cascade_ratio = cascade.ratio if cascade is not None else None
+        op_risk_score = apply_cascade_risk(base_risk_score, cascade_ratio)
         op_predicted_overrun = predicted_overrun_hours(op)
+        path_node = critical_path.nodes.get(op["operation_id"])
         active_terms = {
             key: {
                 "value": risk_values.get(key),
@@ -423,7 +453,8 @@ def _calculate_delay_elements_for_one_job(
             "m3_risk_calculation job_id=%s operation_id=%s operation_name=%s "
             "expected_minutes=%s actual_minutes=%s job_quantity=%s done_quantity=%s "
             "predicted_overrun_hours=%s signals=%s active_terms=%s weighted_sum=%s "
-            "active_weight_total=%s risk_score=%s delay_threshold=%s is_delayed=%s",
+            "active_weight_total=%s base_risk_score=%s cascade_ratio=%s "
+            "critical_path=%s risk_score=%s delay_threshold=%s is_delayed=%s",
             job_rollup.get("job_id"),
             op.get("operation_id"),
             op.get("operation_name"),
@@ -436,6 +467,9 @@ def _calculate_delay_elements_for_one_job(
             active_terms,
             weighted_sum,
             active_weight_total,
+            base_risk_score,
+            cascade_ratio,
+            path_node.is_critical if path_node is not None else False,
             op_risk_score,
             delay_threshold,
             delayed,
@@ -449,8 +483,22 @@ def _calculate_delay_elements_for_one_job(
             "predecessor_time_overrun_ratio": predecessor_time_overrun_ratio(
                 op, time_overrun_ratio_by_operation_id,
             ),
+            "critical_path_valid": critical_path.valid,
+            "critical_path_project_duration_minutes": critical_path.project_duration_minutes,
+            "critical_path_total_float_minutes": (
+                path_node.total_float_minutes if path_node is not None else None
+            ),
+            "is_on_critical_path": path_node.is_critical if path_node is not None else False,
+            "critical_predecessor_operation_ids": (
+                list(path_node.critical_predecessor_ids) if path_node is not None else []
+            ),
+            "critical_path_cascade_ratio": cascade_ratio,
+            "cascade_source_operation_ids": (
+                list(cascade.source_operation_ids) if cascade is not None else []
+            ),
             "operator_pace_ratio": op_operator_pace,
             "material_shortfall_ratio": op_material_shortfall,
+            "base_composite_risk_score": base_risk_score,
             "composite_risk_score": op_risk_score,
             "is_delayed": delayed,
         })

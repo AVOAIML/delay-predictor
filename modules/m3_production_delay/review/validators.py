@@ -36,6 +36,7 @@ from m3_production_delay.review.schemas import (
     SEVERITY_ERROR,
     SEVERITY_INFO,
     SEVERITY_WARNING,
+    SIGNAL_CRITICAL_PATH_CASCADE,
     SIGNAL_MATERIAL_SHORTFALL,
     SIGNAL_OPERATOR_PACE,
     SIGNAL_PREDECESSOR_OVERRUN,
@@ -155,6 +156,9 @@ def _expected_quotes(pack: EvidencePack, line: InsightLine) -> dict[str, float] 
     if line.signal_key == SIGNAL_OPERATOR_PACE:
         return {} if signal.value is None else {"pace_ratio": signal.value}
 
+    if line.signal_key == SIGNAL_CRITICAL_PATH_CASCADE:
+        return {} if signal.value is None else {"cascade_ratio": signal.value}
+
     if line.signal_key == SIGNAL_MATERIAL_SHORTFALL:
         quotable: dict[str, float] = {}
         named = [c for c in pack.material_overrun if c.shortfall_quantity is not None]
@@ -183,6 +187,8 @@ def _renderable(pack: EvidencePack, op: OperationEvidence | None, key: str) -> b
         detail = signal.detail if signal else {}
         return all(detail.get(name) is not None for name in ("actual_hrs", "expected_hrs", "delta_hrs"))
     if key == SIGNAL_OPERATOR_PACE:
+        return op is not None and op.signal(key) is not None and op.signal(key).value is not None
+    if key == SIGNAL_CRITICAL_PATH_CASCADE:
         return op is not None and op.signal(key) is not None and op.signal(key).value is not None
     if key == SIGNAL_MATERIAL_SHORTFALL:
         return any(c.shortfall_quantity is not None for c in pack.material_overrun)
@@ -235,7 +241,7 @@ def check_signals_fired(pack: EvidencePack, draft: InsightDraft) -> list[Issue]:
 
 
 def check_no_omission(pack: EvidencePack, draft: InsightDraft) -> list[Issue]:
-    """Nothing that fired, carried weight, and could be stated may be left
+    """Nothing that fired, affected the score, and can be stated may be left
     out — an explanation that silently drops the second-biggest cause is
     misleading even when every line in it is true."""
     issues: list[Issue] = []
@@ -267,15 +273,19 @@ def check_no_omission(pack: EvidencePack, draft: InsightDraft) -> list[Issue]:
             )
 
     for op in pack.scorable_operations:
-        for key in (SIGNAL_TIME_OVERRUN, SIGNAL_OPERATOR_PACE):
+        for key in (
+            SIGNAL_TIME_OVERRUN,
+            SIGNAL_OPERATOR_PACE,
+            SIGNAL_CRITICAL_PATH_CASCADE,
+        ):
             signal = op.signal(key)
-            if signal is not None and signal.fired and signal.is_weighted:
+            if signal is not None and signal.fired and signal.affects_score:
                 record(key, op.operation_id, op)
 
     if pack.scorable_operations:
         for key in (SIGNAL_MATERIAL_SHORTFALL, SIGNAL_SUPPLIER_RELIABILITY):
             signal = pack.job_signal(key)
-            if signal is not None and signal.fired and signal.is_weighted:
+            if signal is not None and signal.fired and signal.affects_score:
                 record(key, None, None)
     return issues
 
@@ -383,12 +393,13 @@ def check_summary_consistent(pack: EvidencePack, draft: InsightDraft) -> list[Is
 
 def check_zero_weight_hidden(pack: EvidencePack, draft: InsightDraft) -> list[Issue]:
     """A signal the tenant weights at zero did not move the score, so it may
-    not be shown as a cause. This is what keeps a cascading predecessor —
-    computed by the engine, never weighted — out of the why-lines."""
+    not be shown as a cause. This keeps the raw predecessor ratio out of the
+    why-lines; only the separate, score-changing critical-path cascade signal
+    may be shown."""
     issues: list[Issue] = []
     for line in draft.why_lines:
         signal = _signal_for(pack, line)
-        if signal is not None and not signal.is_weighted:
+        if signal is not None and not signal.affects_score:
             issues.append(
                 Issue(
                     check="zero_weight_signal_shown",
@@ -443,7 +454,13 @@ def check_plausibility(pack: EvidencePack, draft: InsightDraft) -> list[Issue]:
                     ref=op.operation_id,
                 )
             )
-        if (op.status or "").upper() in NOT_STARTED_STATUSES and op.is_delayed:
+        cascade = op.signal(SIGNAL_CRITICAL_PATH_CASCADE)
+        expected_inherited_delay = cascade is not None and cascade.fired
+        if (
+            (op.status or "").upper() in NOT_STARTED_STATUSES
+            and op.is_delayed
+            and not expected_inherited_delay
+        ):
             issues.append(
                 Issue(
                     check="not_started_but_delayed",
@@ -473,7 +490,7 @@ def check_zero_fired(pack: EvidencePack, draft: InsightDraft) -> list[Issue]:
         (signal, op.operation_id)
         for op in pack.scorable_operations
         for signal in op.signals
-        if signal.value is not None and signal.is_weighted
+        if signal.value is not None and signal.affects_score
     ]
     ranked += [(signal, None) for signal in pack.job_signals if signal.value is not None]
     if not ranked:
@@ -505,13 +522,17 @@ def check_zero_fired(pack: EvidencePack, draft: InsightDraft) -> list[Issue]:
 
 
 def check_cascade_context(pack: EvidencePack, draft: InsightDraft) -> list[Issue]:
-    """A predecessor running long is context, never a cause: it is not a
-    weighted input to the score, so it cannot appear as a why-line. Carried as
-    ``info`` so the panel can still say the delay is inherited."""
+    """Carry a non-critical predecessor overrun as context only.
+
+    A score-changing critical-path cascade already has a visible why-line;
+    this note is retained only for predecessor overruns which CPM determined
+    were not allowed to change the dependent's risk.
+    """
     issues: list[Issue] = []
     for op in pack.operations:
         signal = op.signal(SIGNAL_PREDECESSOR_OVERRUN)
-        if signal is not None and signal.fired:
+        cascade = op.signal(SIGNAL_CRITICAL_PATH_CASCADE)
+        if signal is not None and signal.fired and not (cascade is not None and cascade.fired):
             issues.append(
                 Issue(
                     check="cascading_predecessor",

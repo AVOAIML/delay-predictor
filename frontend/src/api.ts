@@ -1,6 +1,10 @@
 import type {
   CreateMoInput,
   CreateMoResponse,
+  ManufacturingOrder,
+  ManufacturingOrderOptionsResponse,
+  ManufacturingOrdersResponse,
+  ProductOption,
   ResolveWeightsInput,
   ResolveWeightsResponse,
   ValidatedInsight,
@@ -41,13 +45,37 @@ export async function fetchDelayInsight(jobReference: string): Promise<Validated
   }
 
   const fixture = SCENARIOS.find((order) => order.reference === jobReference);
-  if (!fixture) throw new Error(`no demo fixture for ${jobReference}`);
+  if (!fixture?.insight) throw new Error(`no demo insight for ${jobReference}`);
   // Mimic network latency so loading states are visible in the demo.
   await new Promise((resolve) => setTimeout(resolve, 150));
   return fixture.insight;
 }
 
 export const usingLiveApi = Boolean(API_BASE);
+
+export async function fetchManufacturingOrders(): Promise<ManufacturingOrder[]> {
+  if (!API_BASE) return SCENARIOS;
+  const res = await fetch(
+    `${API_BASE}/api/${encodeURIComponent(TENANT)}/demo-manufacturing-orders`,
+  );
+  if (!res.ok) {
+    throw new Error(`manufacturing-orders ${res.status}: ${await res.text()}`);
+  }
+  const body = (await res.json()) as ManufacturingOrdersResponse;
+  return body.orders;
+}
+
+export async function fetchManufacturingOrderOptions(): Promise<ProductOption[]> {
+  if (!API_BASE) return [];
+  const res = await fetch(
+    `${API_BASE}/api/${encodeURIComponent(TENANT)}/demo-manufacturing-order-options`,
+  );
+  if (!res.ok) {
+    throw new Error(`manufacturing-order-options ${res.status}: ${await res.text()}`);
+  }
+  const body = (await res.json()) as ManufacturingOrderOptionsResponse;
+  return body.products;
+}
 
 // Real Configurator API has no equivalent route — MO creation belongs to the
 // main MaXXFlow product, not this AI/ML repo. This only works against

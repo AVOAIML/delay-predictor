@@ -7,9 +7,11 @@ import pytest
 from conftest import make_component, make_op, make_vendor
 from m3_production_delay.review.composer import HEADLINES, MAX_NAMED_COMPONENTS, compose
 from m3_production_delay.review.evidence import build_evidence
+from m3_production_delay.review.validators import validate
 from m3_production_delay.review.schemas import (
     SCOPE_JOB,
     SCOPE_OPERATION,
+    SIGNAL_CRITICAL_PATH_CASCADE,
     SIGNAL_MATERIAL_SHORTFALL,
     SIGNAL_OPERATOR_PACE,
     SIGNAL_PREDECESSOR_OVERRUN,
@@ -134,6 +136,36 @@ def test_the_cascading_predecessor_never_becomes_a_line(section1_job, weights, t
     assert all(line.signal_key != SIGNAL_PREDECESSOR_OVERRUN for line in draft.why_lines)
 
 
+def test_critical_path_cascade_is_visible_for_not_started_dependent(weights, threshold):
+    op = make_op(
+        operation_id="dependent",
+        operation_name="Assembly",
+        status="PENDING",
+        actual_duration_minutes=None,
+        current_done_quantity=0,
+        time_overrun_ratio=None,
+        operator_pace_ratio=None,
+        material_shortfall_ratio=0.0,
+        predecessor_time_overrun_ratio=1.3,
+        critical_path_cascade_ratio=1.3,
+        cascade_source_operation_ids=["predecessor"],
+        critical_predecessor_operation_ids=["predecessor"],
+        base_composite_risk_score=0.0,
+        composite_risk_score=1.3,
+        is_delayed=True,
+        predicted_overrun_hours=None,
+    )
+    pack, draft = _draft({"job_id": "WH/MO/CASCADE", "operations": [op]}, weights, threshold)
+    line = _line(draft, SIGNAL_CRITICAL_PATH_CASCADE, "dependent")
+
+    assert pack.operations[0].is_scorable is True
+    assert line.headline == "A critical-path predecessor is overrunning"
+    assert line.detail == "Assembly · inherited critical-path overrun 1.30× planned"
+    assert line.quoted == {"cascade_ratio": 1.3}
+    assert draft.summary_is_delayed is True
+    assert not [issue for issue in validate(pack, draft) if issue.is_error]
+
+
 def test_a_zero_weight_signal_gets_no_line(section1_job, threshold):
     weights = {"time_overrun_ratio": 0.6, "operator_pace_ratio": 0.4,
                "material_shortfall_ratio": 0.0, "supplier_reliability": 0.0}
@@ -207,6 +239,7 @@ def test_headline_table_covers_every_composable_signal():
         SIGNAL_OPERATOR_PACE,
         SIGNAL_MATERIAL_SHORTFALL,
         SIGNAL_SUPPLIER_RELIABILITY,
+        SIGNAL_CRITICAL_PATH_CASCADE,
     }
 
 

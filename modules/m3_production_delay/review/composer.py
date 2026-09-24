@@ -9,11 +9,12 @@ structural rather than a prompt instruction.
 
 Three rules shape what gets emitted:
 
-  * **One line per fired, weighted signal.** A signal that did not clear its
+  * **One line per fired score cause.** A signal that did not clear its
     fire baseline (``evidence.FIRE_BASELINES``) is not a cause, and a signal
     the tenant weights at zero did not move the score — neither earns a
-    sentence. ``predecessor_time_overrun_ratio`` is pinned to weight 0 in the
-    evidence, so a cascading delay is carried as context and never as a cause.
+    sentence. A validated ``critical_path_cascade_ratio`` is the exception to
+    tenant weighting: it is a deterministic score overlay and earns its own
+    line. The raw ``predecessor_time_overrun_ratio`` remains context only.
   * **Ordered by contribution.** The biggest share of the composite score
     reads first. Ties break on the canonical signal order, so the same
     evidence always composes the same list in the same sequence.
@@ -38,6 +39,7 @@ from maxxflow_core.errors import get_logger
 from m3_production_delay.review.schemas import (
     SCOPE_JOB,
     SCOPE_OPERATION,
+    SIGNAL_CRITICAL_PATH_CASCADE,
     SIGNAL_MATERIAL_SHORTFALL,
     SIGNAL_OPERATOR_PACE,
     SIGNAL_ORDER,
@@ -61,6 +63,7 @@ HEADLINES: dict[str, str] = {
     SIGNAL_OPERATOR_PACE: "Assigned operator has a history of overrunning",
     SIGNAL_MATERIAL_SHORTFALL: "Required material is short in the warehouse",
     SIGNAL_SUPPLIER_RELIABILITY: "Supplier for a short component has a late-delivery history",
+    SIGNAL_CRITICAL_PATH_CASCADE: "A critical-path predecessor is overrunning",
 }
 
 #: How many short components a single material line names before summarising
@@ -136,6 +139,24 @@ def _operator_line(op: OperationEvidence, signal: SignalEvidence) -> InsightLine
     )
 
 
+def _cascade_line(op: OperationEvidence, signal: SignalEvidence) -> InsightLine | None:
+    ratio = signal.value
+    if ratio is None:
+        return None
+    return InsightLine(
+        index=0,
+        signal_key=SIGNAL_CRITICAL_PATH_CASCADE,
+        scope=SCOPE_OPERATION,
+        headline=HEADLINES[SIGNAL_CRITICAL_PATH_CASCADE],
+        detail=(
+            f"{op.operation_name} · inherited critical-path overrun {_ratio(ratio)}× planned"
+        ),
+        operation_id=op.operation_id,
+        contribution=signal.contribution,
+        quoted={"cascade_ratio": ratio},
+    )
+
+
 def _material_line(
     job_id: str, signal: SignalEvidence, components: tuple[ComponentEvidence, ...]
 ) -> InsightLine | None:
@@ -185,10 +206,12 @@ def _supplier_line(job_id: str, signal: SignalEvidence) -> InsightLine | None:
 
 
 def _emittable(signal: SignalEvidence | None) -> bool:
-    """A signal earns a line only if it fired AND carried weight into the
-    score. Both halves matter: an unfired signal is not a cause, and a
-    zero-weight signal did not move the number the summary reports."""
-    return signal is not None and signal.fired and signal.is_weighted
+    """A signal earns a line only if it fired and changed the score.
+
+    Usually that means it carried tenant weight. A critical-path cascade can
+    also qualify through its explicit deterministic score contribution.
+    """
+    return signal is not None and signal.fired and signal.affects_score
 
 
 def _sort_key(line: InsightLine, operation_order: dict[str, int]) -> tuple:
@@ -223,6 +246,11 @@ def compose(pack: EvidencePack) -> InsightDraft:
             operator_signal = op.signal(SIGNAL_OPERATOR_PACE)
             if _emittable(operator_signal):
                 line = _operator_line(op, operator_signal)
+                if line is not None:
+                    lines.append(line)
+            cascade_signal = op.signal(SIGNAL_CRITICAL_PATH_CASCADE)
+            if _emittable(cascade_signal):
+                line = _cascade_line(op, cascade_signal)
                 if line is not None:
                     lines.append(line)
 
