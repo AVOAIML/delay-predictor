@@ -54,7 +54,7 @@ def test_an_approved_insight_keeps_every_template_line(section1_job, weights, th
     # the clean status here is "approved_with_warnings" rather than "approved".
     assert insight.status == STATUS_APPROVED_WITH_WARNINGS
     assert insight.attempts == 1
-    assert len(insight.why_lines) == 4
+    assert len(insight.why_lines) == 5
     assert insight.judge.approved is True
     assert insight.judge.skipped is False
 
@@ -80,9 +80,9 @@ def test_an_unsupported_line_is_dropped_and_the_rest_re_judged(
 
     assert insight.status == STATUS_APPROVED_WITH_WARNINGS
     assert insight.attempts == 2
-    assert len(insight.why_lines) == 3  # one dropped
+    assert len(insight.why_lines) == 4  # one dropped
     assert "judge_dropped_lines" in _checks(insight)
-    assert [line.index for line in insight.why_lines] == [0, 1, 2]
+    assert [line.index for line in insight.why_lines] == [0, 1, 2, 3]
 
 
 def test_a_judge_that_keeps_refusing_falls_back_to_the_full_template(
@@ -95,7 +95,7 @@ def test_a_judge_that_keeps_refusing_falls_back_to_the_full_template(
     # The FULL template set, not the pruned one: those lines already passed
     # every deterministic check, and an unconvinced judge is no reason to
     # show the operator less.
-    assert len(insight.why_lines) == 4
+    assert len(insight.why_lines) == 5
     assert "judge_rejected" in _checks(insight)
 
 
@@ -113,7 +113,7 @@ def test_a_provider_failure_degrades_to_the_template(section1_job, weights, thre
 
     assert insight.status == STATUS_FALLBACK_TEMPLATE
     assert insight.judge.parse_error.startswith("provider_error")
-    assert len(insight.why_lines) == 4
+    assert len(insight.why_lines) == 5
 
 
 def test_the_default_stub_provider_always_produces_a_fallback(
@@ -131,6 +131,7 @@ def test_the_default_stub_provider_always_produces_a_fallback(
 def test_a_job_with_nothing_scorable_is_suppressed(weights, threshold):
     op = make_op(
         actual_duration_minutes=None, time_overrun_ratio=None, operator_pace_ratio=1.5,
+        current_done_quantity=0,
         material_shortfall_ratio=2.0, predecessor_time_overrun_ratio=None,
         composite_risk_score=1.6, is_delayed=True, predicted_overrun_hours=3.0,
         status="NOT_STARTED", components=[make_component(100, 40)],
@@ -317,6 +318,7 @@ def test_one_failing_job_does_not_affect_the_next(section1_job, weights, thresho
         "operations": [
             make_op(
                 actual_duration_minutes=None, time_overrun_ratio=None,
+                current_done_quantity=0,
                 operator_pace_ratio=None, material_shortfall_ratio=0.0,
                 predecessor_time_overrun_ratio=None, composite_risk_score=None,
                 is_delayed=None, predicted_overrun_hours=None,
@@ -327,7 +329,7 @@ def test_one_failing_job_does_not_affect_the_next(section1_job, weights, thresho
 
     assert insights[0].status == STATUS_SUPPRESSED_NOT_SCORABLE
     assert insights[1].status == STATUS_APPROVED_WITH_WARNINGS
-    assert len(insights[1].why_lines) == 4
+    assert len(insights[1].why_lines) == 5
 
 
 def test_the_retry_names_the_dropped_signal_to_the_judge(section1_job, weights, threshold):

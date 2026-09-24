@@ -37,9 +37,9 @@ The largest semantic differences are:
 
 1. the story requires a `0–100%` delay probability; the code emits an unbounded
    weighted ratio and displays it as percent of threshold;
-2. the story requires scoring at 25% completion milestones; the rule engine
-   scores without a milestone gate, while the Review layer applies a 25% of
-   planned-time gate only to summaries and explanations;
+2. the Review layer now opens analysis at 25% duration-weighted combined MO
+   progress, but the rule engine still calculates internal operation scores
+   before the gate and no persisted milestone scheduler exists;
 3. work-centre seasonality and scheduled-date-overrun signals are absent;
 4. the Weight Agent assigns seasonality weight, but the rule-engine adapter
    discards it;
@@ -84,8 +84,8 @@ choices should not be mistaken for signed-off product decisions.
 
 | User-story requirement | Current implementation | Status | Evidence / consequence |
 |---|---|---|---|
-| Score only once a Work Order reaches the 25% milestone. | `elements.py` scores every operation. `review/evidence.py` gates only review summaries/explanations at `time_overrun_ratio >= 0.25`. | **Partial** | A score can exist before the story says scoring should occur. |
-| No badge or score below 20% completion. | No rule-engine suppression below 20%. Review suppresses explanation below 25% of expected time. | **Contradiction** | Completion is not derived from `units_done / quantity`; elapsed-time ratio is used. |
+| Start analysis once combined Manufacturing Order progress reaches 25%. | `elements.py` calculates duration-weighted MO progress as `Σ(expected duration × WO quantity progress) / Σ(expected duration)`; `review/evidence.py` suppresses user-facing analysis below `0.25`. | **Implemented for presentation gate** | Internal operation signals are still calculated before the gate. |
+| No badge or score below 20% completion. | Review output remains suppressed below the stricter 25% combined-MO gate. | **Implemented for presentation gate** | Internal operation calculations still exist for diagnostics. |
 | Re-score at each 25% milestone, not continuously. | Batch/API invocation triggers scoring. No milestone scheduler or persisted milestone state was found. | **Missing** | The demo scores immediately after job creation and on manual weight rescoring. |
 | Output a probability from 0% to 100%. | Weighted mean of raw ratios; unbounded and not calibrated. | **Contradiction** | Observed score `1.9975` becomes `200% of delay threshold`. |
 | Default alert threshold 71%, tenant configurable. | Rule-engine placeholder threshold is `1.0`; production batch endpoint requires an explicit numeric threshold. | **Contradiction** | Threshold has index units, not probability units. |

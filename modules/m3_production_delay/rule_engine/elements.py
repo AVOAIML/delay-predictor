@@ -118,6 +118,32 @@ def work_done_percentage(op: dict) -> float | None:
     return current_done / job_quantity
 
 
+def manufacturing_order_progress(operations: list[dict] | tuple[dict, ...]) -> float | None:
+    """Duration-weighted completion of all Work Orders in one MO.
+
+    Each Work Order contributes its completed-quantity percentage multiplied
+    by its planned duration. Work Orders with no usable quantity progress
+    contribute zero while retaining their planned duration in the denominator.
+    This prevents one short operation from making a large MO appear 25% done.
+    """
+    weighted_progress = 0.0
+    planned_duration = 0.0
+    for op in operations:
+        expected = op.get("expected_duration_minutes")
+        if expected is None or expected <= 0:
+            continue
+        planned_duration += float(expected)
+        quantity = op.get("job_quantity")
+        done = op.get("current_done_quantity")
+        progress = 0.0
+        if quantity is not None and quantity > 0 and done is not None:
+            progress = max(0.0, min(1.0, float(done) / float(quantity)))
+        weighted_progress += float(expected) * progress
+    if planned_duration == 0:
+        return None
+    return weighted_progress / planned_duration
+
+
 def time_overrun_ratio(op: dict) -> float | None:
     """None when actual_duration_minutes is missing OR 0 - a work order with
     zero actual time isn't a real "0% overrun" data point, it means no time
@@ -391,6 +417,7 @@ def _calculate_delay_elements_for_one_job(
     own `operations` list only - see `calculate_delay_elements_for_jobs`.
     """
     ops = job_rollup.get("operations", [])
+    mo_progress = manufacturing_order_progress(ops)
 
     # time_overrun_ratio for every operation first - predecessor_time_overrun_ratio
     # needs to look those up for arbitrary predecessors, which may appear
@@ -503,7 +530,11 @@ def _calculate_delay_elements_for_one_job(
             "is_delayed": delayed,
         })
 
-    return {**job_rollup, "operations": enriched_ops}
+    return {
+        **job_rollup,
+        "manufacturing_order_progress": mo_progress,
+        "operations": enriched_ops,
+    }
 
 
 def calculate_delay_elements_for_jobs(

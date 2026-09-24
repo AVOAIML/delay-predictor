@@ -110,18 +110,18 @@ def test_only_fired_signals_get_a_line(section1_job, weights, threshold):
     assert _line(draft, SIGNAL_OPERATOR_PACE, "wo-welding-0002") is None
 
 
-def test_a_non_scorable_operation_gets_no_lines(section1_job, weights, threshold):
+def test_not_started_operation_is_eligible_after_mo_crosses_gate(section1_job, weights, threshold):
     pack, draft = _draft(section1_job, weights, threshold)
     assembly = pack.operation("wo-assembly-0003")
 
-    assert assembly.is_scorable is False
+    assert assembly.is_scorable is True
     assert assembly.is_delayed is True  # the engine still scored it
-    assert not [line for line in draft.why_lines if line.operation_id == "wo-assembly-0003"]
 
 
 def test_a_job_with_no_scorable_operation_composes_no_lines_at_all(weights, threshold):
     op = make_op(
         actual_duration_minutes=None, time_overrun_ratio=None, operator_pace_ratio=1.5,
+        current_done_quantity=0,
         material_shortfall_ratio=2.0, predecessor_time_overrun_ratio=None,
         composite_risk_score=1.6, is_delayed=True, predicted_overrun_hours=3.0,
         components=[make_component(100, 50)],
@@ -155,7 +155,11 @@ def test_critical_path_cascade_is_visible_for_not_started_dependent(weights, thr
         is_delayed=True,
         predicted_overrun_hours=None,
     )
-    pack, draft = _draft({"job_id": "WH/MO/CASCADE", "operations": [op]}, weights, threshold)
+    pack, draft = _draft({
+        "job_id": "WH/MO/CASCADE",
+        "manufacturing_order_progress": 0.25,
+        "operations": [op],
+    }, weights, threshold)
     line = _line(draft, SIGNAL_CRITICAL_PATH_CASCADE, "dependent")
 
     assert pack.operations[0].is_scorable is True

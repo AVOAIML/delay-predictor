@@ -603,12 +603,14 @@ def insert_configured_job(
 def insert_cascading_delay_job(conn: sa.Connection, *, job_reference: str) -> None:
     """Seed the user-story cascading-delay scenario into the real MRP tables.
 
-    The independent predecessor is 25% complete by quantity (25 / 100), with
-    78 minutes logged against a 240-minute full-operation plan. The rule
+    The independent predecessor is 50% complete by quantity (50 / 100), with
+    156 minutes logged against a 240-minute full-operation plan. Together
+    with the not-started 180-minute dependent, duration-weighted MO progress
+    is 28.57%, so the combined-MO 25% analysis gate is open. The rule
     engine therefore computes::
 
-        work_done_percentage = 0.25
-        time_overrun_ratio = 78 / (0.25 * 240) = 1.30
+        work_done_percentage = 0.50
+        time_overrun_ratio = 156 / (0.50 * 240) = 1.30
 
     The dependent operation has not started and is linked to the predecessor
     through ``operation_dependencies``. The parent MO's scheduled date is two
@@ -738,10 +740,10 @@ def insert_cascading_delay_job(conn: sa.Connection, *, job_reference: str) -> No
                  expected_duration, real_duration, scheduled_start, scheduled_end,
                  actual_start, actual_end, assigned_operators, status_id)
             VALUES
-                (:predecessor_wo, :mo, :predecessor_op, :wc, 100, 25,
-                 240, 78, now() - interval '2 days',
+                (:predecessor_wo, :mo, :predecessor_op, :wc, 100, 50,
+                 240, 156, now() - interval '2 days',
                  now() - interval '2 days' + interval '240 minutes',
-                 now() - interval '78 minutes', NULL,
+                 now() - interval '156 minutes', NULL,
                  ARRAY[:operator]::text[], :in_progress),
                 (:dependent_wo, :mo, :dependent_op, :wc, 100, 0,
                  180, NULL, now() - interval '1 day',
@@ -767,7 +769,7 @@ def insert_cascading_delay_job(conn: sa.Connection, *, job_reference: str) -> No
             INSERT INTO work_order_time_logs
                 (id, work_order_id, operator_id, started_at, ended_at, duration_minutes)
             VALUES
-                (:id, :wo, :operator, now() - interval '78 minutes', now(), 78)
+                (:id, :wo, :operator, now() - interval '156 minutes', now(), 156)
             """
         ),
         {"id": _u(), "wo": ids["predecessor_wo"], "operator": ids["operator"]},

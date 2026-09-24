@@ -372,9 +372,9 @@ class OperationEvidence:
     """One operation's whole evidence row.
 
     ``is_scorable`` is this agent's own gate (the user story's 25%-progress
-    rule), not something the rule engine reports: it scores every operation
-    regardless of progress, so an operation that has not started can still
-    come back ``is_delayed=True`` on operator/material/supplier signals alone.
+    rule), driven by duration-weighted combined Manufacturing Order progress.
+    The engine still computes every operation, but the Review Agent only
+    presents them after the MO as a whole reaches the milestone.
     A non-scorable operation contributes no explanation lines and no badge —
     its engine numbers are kept, under ``engine`` in the serialised form, so
     the panel can still show them without this agent vouching for them.

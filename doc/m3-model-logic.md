@@ -392,17 +392,21 @@ See [rule_engine/elements.py](../modules/m3_production_delay/rule_engine/element
 
 ### 6.1 Evidence and presentation gate
 
-The rule engine scores operations without a progress gate. The Review layer
-marks an operation scorable for summary/explanation only when:
+The rule engine calculates operation signals without a progress gate. The
+Review layer exposes analysis only after combined Manufacturing Order
+progress reaches 25%:
 
 ```text
-actual_duration_minutes is present
-and time_overrun_ratio >= 0.25
+MO progress =
+  Σ(expected Work Order duration × clamp(units_done / quantity, 0, 1))
+  ÷ Σ(expected Work Order duration)
+
+analysis is eligible when MO progress >= 0.25
 ```
 
-Because `time_overrun_ratio` is now progress-normalized, this predicate is not
-a true 25% quantity milestone. A second route marks a not-started operation
-scorable when a validated critical-path cascade exceeds `1.20`.
+The gate is shared by every Work Order in the MO. Therefore, after the MO
+crosses the milestone, a not-started dependent operation may surface a
+validated critical-path cascade above `1.20`.
 
 For scorable operations, the job summary uses:
 
