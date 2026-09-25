@@ -87,6 +87,22 @@ def _resolve_env_files() -> list[Path]:
     return [f for f in files if f.exists()]
 
 
+#: AZURE_STORAGE_CONTAINER value that selects the local MinIO lake.
+LOCAL_STORAGE_CONTAINER = "local"
+#: Azure's own container naming rule, checked up front so a typo (or the
+#: literal "local/dev") fails with a message instead of a storage error.
+_AZURE_CONTAINER_NAME = re.compile(r"(?!.*--)[a-z0-9][a-z0-9-]{1,61}[a-z0-9]")
+
+
+def _connection_string_value(connection_string: str, key: str) -> str:
+    """One ``Key=Value`` from an Azure connection string (keys are case-insensitive)."""
+    for part in connection_string.split(";"):
+        name, sep, value = part.partition("=")
+        if sep and name.strip().lower() == key.lower():
+            return value.strip()
+    return ""
+
+
 class Settings(BaseSettings):
     """Typed configuration. Every backend URI/selector is a field here."""
 
@@ -130,6 +146,17 @@ class Settings(BaseSettings):
     azure_storage_connection_string: SecretStr = Field(
         default=SecretStr(""), alias="AZURE_STORAGE_CONNECTION_STRING"
     )
+
+    # --- tenant artifact store (M3 snapshots / outcomes) ----------------------
+    # AZURE_STORAGE_CONTAINER picks the backend. "local" = the MinIO lake above
+    # (LAKE_URI / LAKE_KEY / LAKE_SECRET / LAKE_ENDPOINT_URL). Any other value
+    # is the Azure container to write to. The default is Azure's "dev" so that a
+    # deployed app which sets nothing still targets Azure — never a local disk
+    # that vanishes on restart. The local profile sets "local" explicitly.
+    # Below the root, paths are identical in both: {prefix}/{tenant}/{module}/...
+    azure_storage_container: str = Field(default="dev", alias="AZURE_STORAGE_CONTAINER")
+    azure_storage_account: str = Field(default="", alias="AZURE_STORAGE_ACCOUNT")
+    azure_storage_prefix: str = Field(default="maxxflow-lake", alias="AZURE_STORAGE_PREFIX")
 
     # --- MLflow (self-hosted local  <->  Azure ML workspace; same MLflow API) -
     mlflow_tracking_uri: str = Field(default="", alias="MLFLOW_TRACKING_URI")
@@ -269,6 +296,61 @@ class Settings(BaseSettings):
             connection_string = self.azure_storage_connection_string.get_secret_value()
             return {"connection_string": connection_string} if connection_string else {}
         return {}
+
+    @property
+    def storage_is_local(self) -> bool:
+        """AZURE_STORAGE_CONTAINER=local — the tenant artifact store is MinIO."""
+        return self.azure_storage_container.strip().lower() == LOCAL_STORAGE_CONTAINER
+
+    @property
+    def container_lake_uri(self) -> str:
+        """Root URI of the tenant artifact store selected by AZURE_STORAGE_CONTAINER.
+
+        ``local`` -> ``LAKE_URI`` (MinIO). Otherwise
+        ``abfss://{container}@{account}.dfs.core.windows.net/{prefix}``. Raises
+        ``ValueError`` naming the missing variable rather than building a URI
+        that fails later with a network error.
+        """
+        if self.storage_is_local:
+            return self.lake_uri
+        container = self.azure_storage_container.strip()
+        if not _AZURE_CONTAINER_NAME.fullmatch(container):
+            raise ValueError(
+                f"AZURE_STORAGE_CONTAINER={container!r} is neither 'local' nor a valid Azure "
+                "container name (3-63 chars: lowercase letters, digits, single hyphens)."
+            )
+        root = f"abfss://{container}@{self._azure_storage_account()}.dfs.core.windows.net"
+        prefix = self.azure_storage_prefix.strip("/")
+        return f"{root}/{prefix}" if prefix else root
+
+    @property
+    def container_lake_options(self) -> dict:
+        """fsspec options for ``container_lake_uri``.
+
+        Azure: the connection string when one is set. Otherwise the app's own
+        identity — managed identity when deployed, ``az login`` on a laptop —
+        via azure-identity's DefaultAzureCredential, which adlfs uses when given
+        an account and ``anon=False``.
+        """
+        if self.storage_is_local:
+            return self.lake_storage_options
+        connection_string = self.azure_storage_connection_string.get_secret_value()
+        if connection_string:
+            return {"connection_string": connection_string}
+        return {"account_name": self._azure_storage_account(), "anon": False}
+
+    def _azure_storage_account(self) -> str:
+        account = self.azure_storage_account.strip() or _connection_string_value(
+            self.azure_storage_connection_string.get_secret_value(), "AccountName"
+        )
+        if not account:
+            raise ValueError(
+                f"AZURE_STORAGE_CONTAINER={self.azure_storage_container.strip()!r} selects "
+                "Azure storage, but no storage account is configured. Set "
+                "AZURE_STORAGE_ACCOUNT (or AZURE_STORAGE_CONNECTION_STRING, which names it), "
+                "or set AZURE_STORAGE_CONTAINER=local to use the local MinIO lake."
+            )
+        return account
 
     @model_validator(mode="after")
     def _assemble_data_db_url(self) -> "Settings":

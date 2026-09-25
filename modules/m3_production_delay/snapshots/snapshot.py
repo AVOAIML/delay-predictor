@@ -37,6 +37,7 @@ from m3_production_delay.snapshots.store import (
     LAYER,
     MODULE,
     SNAPSHOT_SCHEMA,
+    get_snapshot_lake,
     snapshot_name,
     to_jsonable,
 )
@@ -124,9 +125,7 @@ def write_snapshots(
     written = failed = 0
     try:
         if lake is None:
-            from maxxflow_features.lake import get_lake
-
-            lake = get_lake()
+            lake = get_snapshot_lake()
     except Exception:
         log.exception("m3_snapshots lake unavailable tenant=%s jobs=%d", tenant, len(insights))
         return SnapshotReport(written=0, failed=len(insights))
@@ -165,7 +164,13 @@ def write_snapshots(
                 "m3_snapshots write failed job_id=%s tenant=%s", insight.job_id, tenant
             )
 
-    log.info("m3_snapshots written=%d failed=%d tenant=%s", written, failed, tenant)
+    log.info(
+        "m3_snapshots written=%d failed=%d tenant=%s store=%s",
+        written,
+        failed,
+        tenant,
+        getattr(lake, "root", "?"),
+    )
     return SnapshotReport(written=written, failed=failed)
 
 

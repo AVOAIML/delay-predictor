@@ -57,6 +57,7 @@ from m3_production_delay.snapshots.store import (
     OUTCOME_SCHEMA,
     WATERMARK_NAME,
     WATERMARK_SCHEMA,
+    get_snapshot_lake,
     outcome_name,
     to_jsonable,
 )
@@ -184,9 +185,7 @@ def sweep_outcomes(
 ) -> SweepReport:
     """Write an outcome for every MO completed since the bookmark, then move it."""
     if lake is None:
-        from maxxflow_features.lake import get_lake
-
-        lake = get_lake()
+        lake = get_snapshot_lake()
     if data_access is None:
         from maxxflow_data.engine import get_data_access
 
@@ -281,9 +280,10 @@ def sweep_outcomes(
         watermark_after = newest.isoformat()
 
     log.info(
-        "m3_outcomes tenant=%s since=%s found=%d written=%d skipped=%d failed=%d "
+        "m3_outcomes tenant=%s store=%s since=%s found=%d written=%d skipped=%d failed=%d "
         "watermark_before=%s watermark_after=%s dry_run=%s",
         tenant,
+        getattr(lake, "root", "?"),
         since,
         len(mos),
         written,
