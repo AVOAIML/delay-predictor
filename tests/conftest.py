@@ -31,6 +31,9 @@ EVAL_FLAG = "M3_REVIEW_JUDGE_EVAL"
 #: Cleared so a provider cannot be reached even if something overrides
 #: LLM_PROVIDER mid-test.
 _CREDENTIAL_VARS = (
+    # Azure storage too: no test may write a snapshot to a real container.
+    "AZURE_STORAGE_CONNECTION_STRING",
+    "AZURE_STORAGE_ACCOUNT",
     "AZURE_AI_API_KEY",
     "AZURE_AI_API_BASE",
     "AZURE_OPENAI_API_KEY",

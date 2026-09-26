@@ -262,6 +262,10 @@ def run(
     degrades to no digest, never an exception). Pass an explicit string to
     bypass that lookup entirely — a local-fixture-backed digest, or a test
     double.
+
+    After the writeback, every reviewed job is also snapshotted to the lake
+    for future training (:mod:`m3_production_delay.snapshots`). That write
+    never raises and is skipped on a dry run, like the writeback itself.
     """
     from m3_production_delay.llm_agents.weight_agent.models import SIGNAL_ORDER
     from m3_production_delay.orchestrator import ProductionDelayOrchestrator, WeightAgentRequest
@@ -269,6 +273,7 @@ def run(
     from m3_production_delay.rule_engine.elements import calculate_delay_elements_for_jobs
     from m3_production_delay.rule_engine.rollup import build_job_rollups
     from m3_production_delay.snapshot_digest import build_tenant_snapshot_digest
+    from m3_production_delay.snapshots import write_snapshots
 
     tables, md = read_delay_tables(tenant)
     rollups = build_job_rollups(tables, md, job_references=job_references)
@@ -292,6 +297,10 @@ def run(
     )
     insights = orchestrator.review_jobs(scored, weights=weights, threshold=threshold)
     publish_insights(insights, tenant=tenant, dry_run=dry_run)
+    if not dry_run:
+        write_snapshots(
+            scored, insights, tenant=tenant, risk_weights=weights, threshold=threshold
+        )
     return insights
 
 

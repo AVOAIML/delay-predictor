@@ -50,6 +50,14 @@ _SENSITIVE_PATHS = (
     (re.compile(r"^/api/[^/]+/models/[^/]+/publish/?$"), "POST", PUBLISH_PERMISSION),
     (re.compile(r"^/api/[^/]+/models/[^/]+/rollback/?$"), "POST", ROLLBACK_PERMISSION),
     (re.compile(r"^/api/[^/]+/models/m2_inventory/batch-predict/?$"), "POST", TRAIN_PERMISSION),
+    # Same gate as M2's batch-predict, for the same reasons: it scores the
+    # whole tenant in one request, writes customElements + audit_logs, and
+    # (unlike M2) spends LLM calls — not something a predict-only member runs.
+    (
+        re.compile(r"^/api/[^/]+/models/m3_production_delay/batch-review/?$"),
+        "POST",
+        TRAIN_PERMISSION,
+    ),
     (re.compile(r"^/api/[^/]+/models(?:/[^/]+)?/?$"), "DELETE", DELETE_PERMISSION),
     (re.compile(r"^/api/train/[^/]+/?$"), "GET", TRAIN_PERMISSION),
 )

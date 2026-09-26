@@ -37,6 +37,12 @@ class LakeIO(Protocol):
     def read_parquet(self, layer: str, name: str,
                      *, tenant: str, module: str) -> pd.DataFrame: ...
 
+    def write_json(self, obj: Any, layer: str, name: str,
+                   *, tenant: str, module: str) -> str: ...
+
+    def read_json(self, layer: str, name: str,
+                  *, tenant: str, module: str) -> Any | None: ...
+
 
 @runtime_checkable
 class ModelRegistry(Protocol):

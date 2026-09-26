@@ -79,3 +79,93 @@ def test_a_path_tenant_is_extracted_not_assumed():
     # header, so a route with a different tenant in the URL must capture THAT
     # tenant, not the caller's.
     assert _TENANT_PATH.match("/api/acme/delay-insights").group(1) == "acme"
+
+
+# ─── permission gates, through the real authenticate_request ─────────────────
+#
+# The middleware calls authenticate_request() for every /api request. These run
+# that exact function on a real Starlette request; only the token verifier and
+# the database-backed authorization are replaced, so no network or DB is used.
+
+from fastapi import HTTPException  # noqa: E402
+from starlette.requests import Request  # noqa: E402
+
+from services.configurator import security  # noqa: E402
+from services.configurator.security import (  # noqa: E402
+    TRAIN_PERMISSION,
+    AuthContext,
+    authenticate_request,
+)
+
+BATCH_REVIEW = "/api/demo/models/m3_production_delay/batch-review"
+BATCH_PREDICT = "/api/demo/models/m2_inventory/batch-predict"
+
+
+def _request(method: str, path: str) -> Request:
+    headers = {"authorization": "Bearer test-token", "x-tenant-slug": "demo"}
+    return Request({
+        "type": "http", "method": method, "path": path, "raw_path": path.encode(),
+        "query_string": b"", "root_path": "", "scheme": "http",
+        "server": ("testserver", 80),
+        "headers": [(k.encode(), v.encode()) for k, v in headers.items()],
+    })
+
+
+def _caller(monkeypatch, *, permissions=(), roles=()):
+    class _Verifier:
+        def verify(self, token):
+            return {"email": "caller@maxxflow.local"}
+
+    class _Repository:
+        def authorize(self, claims, tenant_slug):
+            return AuthContext(
+                user_id="u-1", email="caller@maxxflow.local", tenant_id="t-1",
+                tenant_slug=tenant_slug, roles=frozenset(roles),
+                permissions=frozenset(permissions),
+            )
+
+    monkeypatch.setattr(security, "get_jwt_verifier", lambda: _Verifier())
+    monkeypatch.setattr(security, "get_auth_repository", lambda: _Repository())
+
+
+@pytest.mark.parametrize("path", [BATCH_REVIEW, BATCH_REVIEW + "/"])
+def test_m3_batch_review_requires_the_train_permission(path):
+    assert security._required_permission(_request("POST", path)) == TRAIN_PERMISSION
+
+
+def test_m3_batch_review_uses_the_same_gate_as_m2_batch_predict():
+    assert (
+        security._required_permission(_request("POST", BATCH_REVIEW))
+        == security._required_permission(_request("POST", BATCH_PREDICT))
+        == TRAIN_PERMISSION
+    )
+
+
+@pytest.mark.parametrize("path", [BATCH_REVIEW, BATCH_PREDICT])
+def test_a_member_without_the_permission_is_refused(monkeypatch, path):
+    _caller(monkeypatch)  # an active member with no roles and no permissions
+    with pytest.raises(HTTPException) as refused:
+        authenticate_request(_request("POST", path))
+    assert refused.value.status_code == 403
+    assert refused.value.detail == "Missing required permission: ml-models:train"
+
+
+@pytest.mark.parametrize(
+    "grant",
+    [
+        {"permissions": [TRAIN_PERMISSION]},
+        {"permissions": ["ml-models:*"]},
+        {"roles": ["maxxflow-admin"]},
+    ],
+    ids=["ml-models:train", "ml-models:*", "admin role"],
+)
+def test_a_caller_with_the_permission_is_let_through(monkeypatch, grant):
+    _caller(monkeypatch, **grant)
+    context = authenticate_request(_request("POST", BATCH_REVIEW))
+    assert context.tenant_slug == "demo"
+
+
+def test_reading_delay_insights_needs_no_permission(monkeypatch):
+    _caller(monkeypatch)  # the same member refused above
+    assert security._required_permission(_request("GET", "/api/demo/delay-insights")) is None
+    assert authenticate_request(_request("GET", "/api/demo/delay-insights")).tenant_slug == "demo"
