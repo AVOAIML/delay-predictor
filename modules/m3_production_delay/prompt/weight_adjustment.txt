@@ -19,6 +19,12 @@ stay near its bounds — do not propose a value that cannot be reached without
 leaving another signal's bound):
 $bounds_spec
 
+Recent scored-job history for this tenant (plain counts and averages from
+recorded scoring runs — observations, not a computed recommendation; no
+weight, target, or required adjustment is implied by these numbers, and you
+must still decide direction and size yourself from the tenant profile above):
+$history_digest
+
 Domain guidance:
 
 - High material dependency should generally increase material_availability weight.
@@ -44,5 +50,6 @@ profile genuinely provides no material reason to change the relative
 importance of any signal.
 
 You must not: invent a tenant id or name, output final weights, output a
-weights_bp key, or output a confidence score — those are computed by the
-calling system, not by you.
+weights_bp key, output a confidence score, or treat the recent scored-job
+history above as a target/formula to match — those are computed (or decided)
+by the calling system and by you from the profile, not derived from a count.

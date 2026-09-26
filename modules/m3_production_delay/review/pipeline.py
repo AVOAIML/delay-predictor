@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 
 from maxxflow_core.clock import get_clock
 from maxxflow_core.errors import get_logger
@@ -238,6 +239,7 @@ def run(
     threshold: float,
     job_references: list[str] | None = None,
     dry_run: bool = False,
+    history_digest: str | None = None,
 ) -> list[ValidatedInsight]:
     """Score, review and publish every (or some) job for one tenant.
 
@@ -252,12 +254,21 @@ def run(
     ``AllSignalsUnavailableError`` from the weight call, unchanged — there is
     no weight vector to substitute for it, so there is nothing to explain
     either.
+
+    ``history_digest`` defaults to ``None``, which triggers a lake-backed
+    lookup for this tenant (see ``snapshot_digest.build_tenant_snapshot_digest``
+    — MinIO locally, Azure Data Lake in the cloud, selected purely by
+    ``LAKE_URI``, same as every other module; a storage failure there
+    degrades to no digest, never an exception). Pass an explicit string to
+    bypass that lookup entirely — a local-fixture-backed digest, or a test
+    double.
     """
     from m3_production_delay.llm_agents.weight_agent.models import SIGNAL_ORDER
     from m3_production_delay.orchestrator import ProductionDelayOrchestrator, WeightAgentRequest
     from m3_production_delay.rule_engine.dal import read_delay_tables
     from m3_production_delay.rule_engine.elements import calculate_delay_elements_for_jobs
     from m3_production_delay.rule_engine.rollup import build_job_rollups
+    from m3_production_delay.snapshot_digest import build_tenant_snapshot_digest
 
     tables, md = read_delay_tables(tenant)
     rollups = build_job_rollups(tables, md, job_references=job_references)
@@ -265,10 +276,15 @@ def run(
         log.info("m3_review no jobs to review tenant=%s", tenant)
         return []
 
+    if history_digest is None:
+        history_digest = build_tenant_snapshot_digest(tenant)
+
     orchestrator = ProductionDelayOrchestrator()
     weights = orchestrator.resolve_risk_weights(
         WeightAgentRequest(
-            tenant_id=tenant, availability={signal: True for signal in SIGNAL_ORDER}
+            tenant_id=tenant,
+            availability={signal: True for signal in SIGNAL_ORDER},
+            history_digest=history_digest,
         )
     )
     scored = calculate_delay_elements_for_jobs(
@@ -308,13 +324,32 @@ def _run_cli(argv: list[str] | None = None) -> int:
         action="store_true",
         help="print the writeback payloads instead of writing them",
     )
+    parser.add_argument(
+        "--snapshot-dir",
+        type=Path,
+        default=None,
+        help=(
+            "local fixture/test override: digest m3.snapshot.v1 files from this directory "
+            "instead of the lake (see snapshot_digest.py). Omit to read the tenant's "
+            "snapshots from the lake (MinIO locally, Azure Data Lake in the cloud, selected "
+            "by LAKE_URI) the same way run() does by default — meta_data/snap_samples/ is a "
+            "demo fixture only, never read unless this flag names it explicitly"
+        ),
+    )
     args = parser.parse_args(argv)
+
+    history_digest = None
+    if args.snapshot_dir is not None:
+        from m3_production_delay.snapshot_digest import build_tenant_snapshot_digest
+
+        history_digest = build_tenant_snapshot_digest(args.tenant, directory=args.snapshot_dir)
 
     insights = run(
         tenant=args.tenant,
         threshold=args.threshold,
         job_references=args.job_references,
         dry_run=args.dry_run,
+        history_digest=history_digest,
     )
     if args.dry_run:
         print(

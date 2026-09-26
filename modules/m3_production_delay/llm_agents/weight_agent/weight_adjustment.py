@@ -30,7 +30,9 @@ from m3_production_delay.prompt import load_prompt_template
 
 log = get_logger("m3_production_delay.weight_agent.weight_adjustment")
 
-PROMPT_VERSION = "adjustment-v2"
+PROMPT_VERSION = "adjustment-v3"
+
+_NO_HISTORY_DIGEST = "No recent scored-job history available for this tenant."
 
 # Loaded once at import time from modules/m3_production_delay/prompt/ — the
 # prompt's wording lives there, not here, so it can be reviewed/edited
@@ -49,7 +51,12 @@ class AdjustmentProposal:
     retried: bool
 
 
-def _build_prompt(profile: TenantProfile, prior_bp: dict[str, int], bounds_bp: dict[str, Bounds]) -> str:
+def _build_prompt(
+    profile: TenantProfile,
+    prior_bp: dict[str, int],
+    bounds_bp: dict[str, Bounds],
+    history_digest: str | None,
+) -> str:
     profile_spec = "\n".join(
         f"  - {name}: {value if value is not None else 'unknown'}"
         for name, value in profile.fields().items()
@@ -59,7 +66,11 @@ def _build_prompt(profile: TenantProfile, prior_bp: dict[str, int], bounds_bp: d
         f"max={bounds_bp[signal].max}"
         for signal in SIGNAL_ORDER
     )
-    return _PROMPT_TEMPLATE.substitute(profile_spec=profile_spec, bounds_spec=bounds_spec)
+    return _PROMPT_TEMPLATE.substitute(
+        profile_spec=profile_spec,
+        bounds_spec=bounds_spec,
+        history_digest=history_digest or _NO_HISTORY_DIGEST,
+    )
 
 
 def _validate_adjustment_bp(raw: object) -> dict[str, int]:
@@ -119,9 +130,10 @@ class WeightAdjustmentGenerator:
         bounds_bp: dict[str, Bounds],
         config: WeightAgentConfig,
         *,
+        history_digest: str | None = None,
         tracer: WeightAgentTracer = NOOP_TRACER,
     ) -> AdjustmentProposal:
-        prompt = _build_prompt(profile, prior_bp, bounds_bp)
+        prompt = _build_prompt(profile, prior_bp, bounds_bp, history_digest)
 
         tracer.trace_stage(
             "LLM CALL #2",

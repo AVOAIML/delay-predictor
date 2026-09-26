@@ -211,6 +211,29 @@ def test_llm_adjusted_prior_when_fitted_absent_and_description_given():
     assert len(provider.calls) == 2  # profile call + adjustment call
 
 
+def test_history_digest_reaches_the_adjustment_prompt_when_supplied():
+    provider = TwoStageProvider()
+    agent = WeightAgent(fitted_provider=NoneFittedProvider(), llm_provider=provider, config=CONFIG)
+    result = agent.resolve(
+        "tenant_a",
+        availability=ALL_AVAILABLE,
+        tenant_description="A fabrication shop.",
+        history_digest="n_scored_jobs=3\npredicted_delayed_rate=3/3",
+    )
+    assert result.source == SOURCE_LLM_ADJUSTED_PRIOR
+    adjustment_prompt = provider.calls[1]
+    assert "n_scored_jobs=3" in adjustment_prompt
+    assert "predicted_delayed_rate=3/3" in adjustment_prompt
+
+
+def test_no_history_digest_falls_back_to_prompt_default():
+    provider = TwoStageProvider()
+    agent = WeightAgent(fitted_provider=NoneFittedProvider(), llm_provider=provider, config=CONFIG)
+    agent.resolve("tenant_a", availability=ALL_AVAILABLE, tenant_description="A fabrication shop.")
+    adjustment_prompt = provider.calls[1]
+    assert "No recent scored-job history available for this tenant." in adjustment_prompt
+
+
 FULL_SIGNAL_SET = frozenset(SIGNAL_ORDER)
 TWO_SIGNAL_SET = frozenset({"time_overrun", "operator_skill"})
 FLOOR_FOR_FIVE = compute_usable_floor(5, CONFIG.history_policy.events_per_parameter)  # 40
