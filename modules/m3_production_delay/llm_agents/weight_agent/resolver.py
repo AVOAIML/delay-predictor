@@ -137,6 +137,7 @@ class WeightAgent:
         exclusion_reasons: dict[str, str] | None = None,
         tenant_description: str | None = None,
         history_inputs: HistoryInputs | None = None,
+        history_digest: str | None = None,
         tracer: WeightAgentTracer = NOOP_TRACER,
     ) -> WeightResolution:
         config = self._resolve_config()
@@ -502,7 +503,12 @@ class WeightAgent:
                     )
                     try:
                         proposal = WeightAdjustmentGenerator(self._resolve_llm_provider()).propose(
-                            extraction.profile, prior_bp, bounds_bp, config, tracer=tracer
+                            extraction.profile,
+                            prior_bp,
+                            bounds_bp,
+                            config,
+                            history_digest=history_digest,
+                            tracer=tracer,
                         )
                     except LLMAdjustmentError as exc:
                         log.warning("tenant %s weight adjustment failed: %s", tenant_id, exc)

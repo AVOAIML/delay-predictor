@@ -112,6 +112,21 @@ def test_prompt_contains_domain_guidance_and_rejects_unjustified_zero_adjustment
     assert "zero adjustment is allowed only when" in normalized_prompt
 
 
+def test_history_digest_is_included_verbatim_when_supplied():
+    provider = ScriptedProvider([_valid_response()])
+    digest = "n_scored_jobs=3\ntime_overrun: fired 2/3 operations (fires above 1.0), average value 1.4"
+    WeightAdjustmentGenerator(provider).propose(
+        PROFILE, PRIOR_BP, BOUNDS_BP, CONFIG, history_digest=digest
+    )
+    assert digest in provider.calls[0]
+
+
+def test_missing_history_digest_uses_prompt_default():
+    provider = ScriptedProvider([_valid_response()])
+    _propose(provider)
+    assert "No recent scored-job history available for this tenant." in provider.calls[0]
+
+
 def test_invalid_json_falls_back_after_one_retry():
     provider = ScriptedProvider(["not json", "still not json"])
     with pytest.raises(LLMAdjustmentError, match="invalid_json"):

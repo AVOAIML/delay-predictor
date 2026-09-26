@@ -99,6 +99,11 @@ class WeightAgentRequest:
     exclusion_reasons: dict[str, str] | None = None
     tenant_description: str | None = None
     history_inputs: HistoryInputs | None = None
+    # Plain-text digest of recorded m3.snapshot.v1 scoring runs for this
+    # tenant (see snapshot_digest.py) — evidence for the LLM adjustment
+    # stage's prompt, never a computed weight itself. Optional and additive:
+    # None reproduces the exact prior behaviour of every existing caller.
+    history_digest: str | None = None
     request_headers: Mapping[str, str] | None = None
     # Reuse an existing upstream request/correlation id if the caller already
     # has one; otherwise resolve_weights() generates a fresh uuid4. Never the
@@ -171,6 +176,7 @@ class ProductionDelayOrchestrator:
             tenant_id=request.tenant_id,
             configured_weights_present=request.configured_bp is not None,
             history_inputs_present=request.history_inputs is not None,
+            history_digest_present=request.history_digest is not None,
             request_headers_present=request.request_headers is not None,
         )
 
@@ -190,6 +196,7 @@ class ProductionDelayOrchestrator:
             exclusion_reasons=request.exclusion_reasons,
             tenant_description=tenant_description,
             history_inputs=request.history_inputs,
+            history_digest=request.history_digest,
             tracer=tracer,
         )
         log.info(
